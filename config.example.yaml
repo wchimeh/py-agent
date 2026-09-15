@@ -1,0 +1,28 @@
+# 配置模板：复制为 config.yaml 并填入真实 api_key（config.yaml 已被 .gitignore 排除，勿上传）
+provider: anthropic
+model: MiniMax-M3
+base_url: https://api.minimaxi.com/anthropic
+max_tokens: 4096
+api_key: sk-your-key-here
+
+# 重试
+request_timeout: 120
+retry_max_attempts: 3
+retry_base_delay: 1.0
+max_turns: 25
+token_budget: 500000
+
+# 权限 default acceptEdits bypass
+permission_mode: default
+
+# 上下文管理
+context_window: 128000   # 模型上下文窗口，按所用模型实际值填
+compact_threshold: 0.8   # 估算占比超过即触发压缩
+keep_recent: 3           # 压缩时保留最近 N 条消息
+
+# 可观测性
+journal: true        # 结构化 JSONL 日志到 .agent/logs/
+save_session: true   # 任务结束自动保存会话到 .agent/sessions/
+
+# 工作区
+workspace_root: ""   # 留空 = 启动目录；Write/Edit 只允许写此目录内（硬边界，bypass 也不例外）

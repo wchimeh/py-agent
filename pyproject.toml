@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "coding-agent"
+version = "0.8.0"
+description = "类 Claude Code 的终端编码 Agent：双协议接入、工具调用、上下文压缩、权限门控、流式输出"
+requires-python = ">=3.10"
+dependencies = [
+    "anthropic>=1.5.0",
+    "openai>=3.13.0",
+    "prompt-toolkit>=3.0.53",
+    "PyYAML>=6.0.3",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=9.1.1"]
+
+[project.scripts]
+agent = "main:start_loop"
+
+[tool.setuptools]
+py-modules = ["main"]
+
+[tool.setuptools.packages.find]
+include = ["agent*"]

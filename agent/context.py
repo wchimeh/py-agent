@@ -1,0 +1,102 @@
+# -*- coding: utf-8 -*-
+# @File:     context.py
+# @Author:   mjh
+# @DateTime: 2026/03/15/13:57
+import json
+
+from .providers.base import AssistantMessage, LLMResponse, Message, ToolResultMessage, UserMessage
+
+COMPACT_SYSTEM = """你是会话压缩器。把以下对话史压缩成一份紧凑纪要，供后续助手接续工作。
+    必须逐项保留：
+    1. 用户的原始目标与后续追加要求
+    2. 关键决策及理由
+    3. 涉及的文件绝对路径与各文件当前状态（已创建/已修改/已删除）
+    4. 已执行成功的命令与结果要点
+    5. 失败的操作、错误原因与已尝试的修复
+    6. 未完成事项与下一步计划
+    用要点列表输出，不要寒暄，不要复述无关细节。"""
+
+
+def estimate_tokens(text: str) -> int:
+    """
+    ASCII 4 字符≈1 token，非 ASCII 1 字符≈1 token。宁高估不低估。
+    """
+    if not text:
+        return 0
+    non_ascii = sum(1 for c in text if ord(c) > 127)
+    return non_ascii + (len(text) - non_ascii + 3) // 4
+
+
+def estimate_message_tokens(msg: Message) -> int:
+    if isinstance(msg, AssistantMessage):
+        total = estimate_tokens(msg.text or "")
+        for tc in msg.tool_calls:
+            total += 8 + estimate_tokens(tc.name) + estimate_tokens(json.dumps(tc.arguments, ensure_ascii=False))
+    else:
+        total = estimate_tokens(msg.content)
+    return total + 4    # 角色等结构开销
+
+
+class ContextTracker:
+    """
+    真实锚点 + 增量估算：每次响应后锚定，之后只估算新增消息。
+    """
+    def __init__(self):
+        self.anchor_tokens = 0
+        self.anchor_len = 0
+
+    def update_anchor(self, resp: LLMResponse, messages: list[Message]) -> None:
+        """
+        必须在 append 本轮 AssistantMessage 之前调用：resp.prompt_tokens 是服务端按『发送时的历史』算的真实值。
+        服务端流式未回 usage（计 0）时不重锚——保持旧锚点，估算继续可用。
+        """
+        if resp.prompt_tokens <= 0:
+            return
+        self.anchor_tokens = resp.prompt_tokens
+        self.anchor_len = len(messages)
+
+    def reset(self) -> None:
+        """
+        压缩替换历史后锚点失效；下一轮 chat 会重新锚定。
+        """
+        self.anchor_tokens = 0
+        self.anchor_len = 0
+
+    def estimate(self, messages: list[Message]) -> int:
+        """
+        计算当前轮 + 增量估算
+        """
+        extra = sum(estimate_message_tokens(m) for m in messages[self.anchor_len:])
+        return self.anchor_tokens + extra
+
+
+def split_for_compact(messages: list[Message], keep_recent: int) -> tuple[list[Message], list[Message]]:
+    """
+    切分为 (old_part, kept_part)。
+    kept 开头不能是孤儿 tool_result（其配对 tool_use 在 old 里会被 anthropic 400），
+    此时把 cut 前移，让对应的 assistant(tool_use) 一起进 old。
+    """
+    cut = max(1, len(messages) - keep_recent)
+    while cut > 1 and isinstance(messages[cut], ToolResultMessage):
+        cut -= 1
+    return messages[:cut], messages[cut:]
+
+
+def render_for_summary(old_part: list[Message]) -> str:
+    """
+    把消息渲染为摘要请求的纯文本输入。
+    """
+    lines = []
+    for m in old_part:
+        if isinstance(m, UserMessage):
+            lines.append(f"[用户] {m.content}")
+        elif isinstance(m, AssistantMessage):
+            if m.text:
+                lines.append(f"[助手] {m.text}")
+            for tc in m.tool_calls:
+                args = " ".join(f"{k}={str(v)[:60]}" for k, v in tc.arguments.items())
+                lines.append(f"[助手调用工具] {tc.name}({args})")
+        else:
+            tag = "工具结果(错误)" if m.is_error else "工具结果"
+            lines.append(f"[{tag}] {m.content[:300]}")
+    return "\n".join(lines)
