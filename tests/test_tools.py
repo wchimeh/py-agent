@@ -3,6 +3,7 @@
 # @DateTime: 2026/03/14
 """工具层单测：只测纯本地逻辑，不依赖网络与真实 API。"""
 import os
+import subprocess
 import sys
 from typing import ClassVar
 
@@ -229,6 +230,57 @@ def test_bash_timeout():
         BashTool().execute(
             command=f'"{sys.executable}" -c "import time; time.sleep(5)"',
             timeout=1)
+
+
+# ---------- P16 M1：Bash 委托沙箱执行器 ----------
+
+def test_bash_delegates_to_run_command(monkeypatch):
+    from agent import sandbox
+    calls = {}
+
+    def fake_run(command, timeout):
+        calls["args"] = (command, timeout)
+        return (0, "from-executor\n", "")
+
+    monkeypatch.setattr(sandbox, "run_command", fake_run)
+    assert BashTool().execute(command="echo x", timeout=5) == "from-executor"
+    assert calls["args"] == ("echo x", 5)
+
+
+def test_bash_executor_timeout_becomes_tool_error(monkeypatch):
+    from agent import sandbox
+
+    def fake_run(command, timeout):
+        raise subprocess.TimeoutExpired(cmd=command, timeout=timeout)
+
+    monkeypatch.setattr(sandbox, "run_command", fake_run)
+    with pytest.raises(Exception, match="超时"):
+        BashTool().execute(command="sleep 9", timeout=9)
+
+
+def test_bash_executor_nonzero_becomes_tool_error(monkeypatch):
+    from agent import sandbox
+    monkeypatch.setattr(sandbox, "run_command", lambda c, t: (3, "out-line", "err-line"))
+    with pytest.raises(Exception, match=r"退出码 3"):
+        BashTool().execute(command="bad")
+
+
+def test_bash_description_refreshes_for_docker(monkeypatch):
+    from agent import sandbox
+    from agent.tools.bash import DEFAULT_DESCRIPTION, BashTool, refresh_description
+
+    try:
+        monkeypatch.setattr(sandbox, "_EXECUTOR",
+                            sandbox.DockerExecutor("c", "img", "/ws"))
+        refresh_description()
+        assert "容器" in BashTool.description and "/workspace" in BashTool.description
+        monkeypatch.setattr(sandbox, "_EXECUTOR", sandbox.LocalExecutor())
+        refresh_description()
+        assert BashTool.description == DEFAULT_DESCRIPTION
+    finally:
+        from agent.tools.bash import refresh_description as rd
+        monkeypatch.setattr(sandbox, "_EXECUTOR", sandbox.LocalExecutor())
+        rd()
 
 
 # ---------- registry / execute_tool ----------

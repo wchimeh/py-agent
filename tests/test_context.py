@@ -1,7 +1,9 @@
 # @File:     test_context.py
 # @Author:   mjh
 # @DateTime: 2026/03/15
-"""P5 上下文管理单测：token 估算、锚点校准、切分配对。"""
+"""P5 上下文管理单测：token 估算、锚点校准（P16 M6 ratio 校准）、切分配对。"""
+import pytest
+
 from agent.context import (
     ContextTracker,
     estimate_message_tokens,
@@ -51,10 +53,11 @@ def test_tracker_anchor_plus_increment():
     t = ContextTracker()
     t.update_anchor(_resp(prompt=1000), msgs)
     assert t.anchor_len == 2 and t.anchor_tokens == 1000
+    assert t.ratio == 3.0   # 1000 远超朴素估算（约 12），按上限钳制
     extra = AssistantMessage(text="追加说明")
     msgs.append(extra)
     est = t.estimate(msgs)
-    assert est == 1000 + estimate_message_tokens(extra)   # 真实锚点 + 增量
+    assert est == 1000 + int(estimate_message_tokens(extra) * t.ratio)   # 真实锚点 + 校准增量
     assert est > 1000
 
 def test_tracker_reset_falls_back_to_pure_estimate():
@@ -62,6 +65,7 @@ def test_tracker_reset_falls_back_to_pure_estimate():
     t = ContextTracker()
     t.update_anchor(_resp(prompt=500), msgs)
     t.reset()
+    assert t.ratio == 1.0                                   # 锚点与校准系数一并失效
     assert t.estimate(msgs) == estimate_message_tokens(msgs[0])  # 无锚点纯估算
 
 def test_anchor_kept_when_streaming_usage_missing():
@@ -73,7 +77,36 @@ def test_anchor_kept_when_streaming_usage_missing():
     assert t.anchor_tokens == 1000 and t.anchor_len == 2
     extra = UserMessage("追问")
     msgs.append(extra)
-    assert t.estimate(msgs) == 1000 + estimate_message_tokens(extra)
+    assert t.estimate(msgs) == 1000 + int(estimate_message_tokens(extra) * t.ratio)
+
+
+# ---------- P16 M6：ratio 校准（真实 usage / 朴素估算，钳制 0.5~3.0） ----------
+
+def test_ratio_scales_extras_after_anchor():
+    msgs = [UserMessage("a" * 100)]
+    naive = estimate_message_tokens(msgs[0])
+    t = ContextTracker()
+    t.update_anchor(_resp(prompt=naive * 2), msgs)   # 该模型 tokenizer 比估算"贵"一倍
+    assert t.ratio == pytest.approx(2.0)
+    extra = UserMessage("b" * 100)
+    msgs.append(extra)
+    assert t.estimate(msgs) == naive * 2 + int(estimate_message_tokens(extra) * 2)
+
+
+def test_ratio_clamped_both_sides():
+    t = ContextTracker()
+    t.update_anchor(_resp(prompt=100000), [UserMessage("hi")])          # 上限
+    assert t.ratio == 3.0
+    t2 = ContextTracker()
+    t2.update_anchor(_resp(prompt=1), [UserMessage("a" * 1000)])        # 下限
+    assert t2.ratio == 0.5
+
+
+def test_ratio_defaults_to_one_before_first_anchor():
+    t = ContextTracker()
+    assert t.ratio == 1.0
+    msgs = [UserMessage("abcd")]
+    assert t.estimate(msgs) == estimate_message_tokens(msgs[0])
 
 
 # ---------- 切分与配对 ----------

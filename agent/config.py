@@ -27,9 +27,16 @@ class AgentConfig:
     keep_recent: int = 8
 
     journal: bool = True
+    journal_keep_days: int = 30      # 按天轮转日志保留天数（0 = 不清理）
     save_session: bool = True
     workspace_root: str = ""
     prompt_version: int | None = None   # None = 最新版 system prompt
+
+    sandbox_mode: str = "none"          # none | docker（仅 Bash 进沙箱）
+    sandbox_image: str = "python:3.12-slim"
+    sandbox_trusted: bool = False       # docker 模式下非危险 Bash 免审批（危险命令仍询问）
+    sandbox_memory: str = "2g"
+    sandbox_cpus: float = 2.0
 
 
 def load_config(path: str = "config.yaml") -> AgentConfig:
@@ -37,7 +44,7 @@ def load_config(path: str = "config.yaml") -> AgentConfig:
     data = {}
     if os.path.exists(path):
         with open(path, encoding="utf-8") as f:
-            data = yaml.safe_load(f)
+            data = yaml.safe_load(f) or {}   # 空文件返回 None，归一为空 dict
     provider = data.get("provider", "openai")
     # env_key = "ANTHROPIC_API_KEY" if provider == "anthropic" else "OPENAI_API_KEY"
     mode = data.get("permission_mode", "default")
@@ -52,6 +59,11 @@ def load_config(path: str = "config.yaml") -> AgentConfig:
     if keep_recent < 2:
         raise SystemExit(f"[config] 非法 keep_recent: {keep_recent}（须 >= 2）")
 
+    sb = data.get("sandbox") or {}
+    sandbox_mode = sb.get("mode", "none")
+    if sandbox_mode not in ("none", "docker"):
+        raise SystemExit(f"[config] 非法 sandbox.mode: {sandbox_mode}（可选 none/docker）")
+
     return AgentConfig(provider=provider, model=data.get("model", ""), api_key=data.get("api_key"),
                        base_url=data.get("base_url"), max_tokens=data.get("max_tokens", 4096),
                        request_timeout=data.get("request_timeout", 120),
@@ -64,9 +76,15 @@ def load_config(path: str = "config.yaml") -> AgentConfig:
                        compact_threshold=compact_threshold,
                        keep_recent=keep_recent,
                        journal=data.get("journal", True),
+                       journal_keep_days=data.get("journal_keep_days", 30),
                        save_session=data.get("save_session", True),
                        workspace_root=data.get("workspace_root", ""),
-                       prompt_version=data.get("prompt_version")
+                       prompt_version=data.get("prompt_version"),
+                       sandbox_mode=sandbox_mode,
+                       sandbox_image=sb.get("image", "python:3.12-slim"),
+                       sandbox_trusted=sb.get("trusted", False),
+                       sandbox_memory=sb.get("memory", "2g"),
+                       sandbox_cpus=sb.get("cpus", 2.0)
                        )
 
 

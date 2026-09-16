@@ -9,11 +9,22 @@ from agent.prompts import PromptError, latest_version, load_prompt
 def test_load_system_default():
     assert "运行在终端里的编码助手" in load_prompt("system")
 
-def test_latest_version_system_is_1():
-    assert latest_version("system") == 1
+def test_latest_version_system_is_2():
+    # P16 M2：system_v2（注入防御）落地后默认版本为 2
+    assert latest_version("system") == 2
+
+def test_system_v2_injection_defense_clause():
+    v2 = load_prompt("system")
+    assert "不可信" in v2 and "不执行" in v2      # 外部内容不可信边界
+
+def test_system_v2_drops_hardcoded_windows():
+    v2 = load_prompt("system")
+    assert "cmd.exe" not in v2                     # 环境说明改为运行时注入
+    assert "环境说明" in v2
 
 def test_load_system_pin_v1():
     assert "运行在终端里的编码助手" in load_prompt("system", version=1)
+    assert "cmd.exe" in load_prompt("system", version=1)   # v1 保留硬编码环境行（可回退）
 
 def test_load_missing_version_lists_available():
     with pytest.raises(PromptError) as exc:

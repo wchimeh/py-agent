@@ -65,7 +65,7 @@ def test_journal_task_start_records_prompt_version():
     loop = AgentLoop(FakeProvider([_end_resp()]), permission_gate=BYPASS_GATE, journal=j)
     loop.run("hi")
     start = next(f for e, f in j.events if e == "task_start")
-    assert start["prompt"] == 1  # 默认最新版 system_v1
+    assert start["prompt"] == 2  # 默认最新版 system_v2（P16 M2 注入防御版）
     # P14：llm_call 的 token 数字段改名 prompt_tokens，prompt 只保留版本语义
     llm = next(f for e, f in j.events if e == "llm_call")
     assert llm["prompt_tokens"] == 10 and "prompt" not in llm

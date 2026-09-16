@@ -503,6 +503,21 @@ def test_openai_chat_stream_think_split_not_leaked():
     assert "隐" not in "".join(seen)
 
 
+def test_openai_chat_stream_strip_normalization():
+    # P15 接受的 strip 归一：剥离 think 后的前导换行不进最终 text；上屏流保留原始换行
+    p = make_openai()
+    p.client = FakeOpenAIStreamClient([
+        _oai_chunk(content="<think>想"),
+        _oai_chunk(content="想</think>\n\n你好\n"),
+        _oai_chunk(finish="stop"),
+    ])
+    seen = []
+    resp = p.chat_stream([UserMessage("x")], on_text=seen.append)
+    assert resp.text == "你好"
+    assert "".join(seen) == "\n\n你好\n"          # 上屏保留原始换行（视觉无害）
+    assert "".join(seen).strip() == resp.text     # 归一后一致（smoke 新不变量）
+
+
 def test_create_provider_bad_base_url_friendly_exit():
     from agent.config import AgentConfig
     from agent.providers import create_provider

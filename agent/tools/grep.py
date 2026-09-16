@@ -5,6 +5,7 @@ import re
 from pathlib import Path
 from typing import ClassVar
 
+from . import workspace
 from .base import SKIP_DIRS, Tool, ToolError, truncate
 from .registry import register
 
@@ -29,7 +30,7 @@ class GrepTool(Tool):
             rx = re.compile(pattern)
         except re.error as e:
             raise ToolError(f"正则表达式无效：{e}") from e
-        root = Path(path)
+        root = Path(workspace.map_path(path))
         if root.is_file():
             files = [root]
         else:

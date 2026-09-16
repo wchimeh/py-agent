@@ -77,3 +77,64 @@ def test_set_root_normalizes(tmp_path):
         assert resolve_writable(str(tmp_path / "ok.txt")).startswith(get_root())
     finally:
         set_root(os.getcwd())   # 还原，避免污染其他测试
+
+
+# ---------- 任务 1-10：docker 模式 /workspace 前缀自动映射 ----------
+
+@pytest.fixture
+def docker_mode(root, monkeypatch):
+    """激活 DockerExecutor（不触碰真实 docker，仅判型用）+ 工作区根指向 tmp_path。"""
+    from agent import sandbox
+    monkeypatch.setattr(sandbox, "_EXECUTOR",
+                        sandbox.DockerExecutor("c", "img", str(root)))
+    return root
+
+
+def test_map_path_passthrough_in_local_mode(root):
+    from agent.tools.workspace import map_path
+    assert map_path("/workspace/a.py") == "/workspace/a.py"   # none 模式原样返回
+
+
+def test_map_path_maps_prefix_in_docker_mode(docker_mode):
+    from agent.tools.workspace import map_path
+    root = str(docker_mode)
+    assert map_path("/workspace/a.py") == os.path.join(root, "a.py")
+    assert map_path("/workspace/sub/deep/b.py") == os.path.join(root, "sub", "deep", "b.py")
+
+
+def test_map_path_bare_workspace_is_root(docker_mode):
+    from agent.tools.workspace import map_path
+    assert map_path("/workspace") == str(docker_mode)
+
+
+def test_map_path_host_path_unchanged_in_docker_mode(docker_mode):
+    from agent.tools.workspace import map_path
+    host = os.path.join(str(docker_mode), "x.txt")
+    assert map_path(host) == host                     # 宿主绝对路径不动
+    assert map_path("rel.txt") == "rel.txt"           # 相对路径不动
+
+
+def test_resolve_writable_accepts_container_path(docker_mode):
+    target = os.path.realpath(os.path.join(str(docker_mode), "bubble_sort.py"))
+    assert resolve_writable("/workspace/bubble_sort.py") == target
+
+
+def test_resolve_writable_container_path_still_bounded(docker_mode):
+    with pytest.raises(WorkspaceError):               # 映射后仍过越界检查
+        resolve_writable("/workspace/../evil.txt")
+
+
+def test_read_tool_reads_via_container_path(docker_mode):
+    from agent.tools.read import ReadTool
+    f = docker_mode / "hello.txt"
+    f.write_text("第一行\n第二行", encoding="utf-8")
+    out = ReadTool().execute(file_path="/workspace/hello.txt")
+    assert "第一行" in out and "第二行" in out
+
+
+def test_grep_glob_accept_container_path(docker_mode):
+    from agent.tools.glob import GlobTool
+    from agent.tools.grep import GrepTool
+    (docker_mode / "g.txt").write_text("needle-here", encoding="utf-8")
+    assert "needle-here" in GrepTool().execute(pattern="needle", path="/workspace")
+    assert "g.txt" in GlobTool().execute(pattern="*.txt", path="/workspace")

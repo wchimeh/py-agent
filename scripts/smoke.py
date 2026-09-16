@@ -1,9 +1,9 @@
 # @File:     smoke.py
 # @DateTime: 2026/09/16
-"""真实模型冒烟测试（P12）：显式运行才产生 API 费用，pytest 不会收集本文件。
+"""真实模型冒烟测试（P12/P16）：显式运行才产生 API 费用，pytest 不会收集本文件。
 
 用法：
-  python scripts/smoke.py             # 全量 5 用例（真实 API 调用）
+  python scripts/smoke.py             # 全量 7 用例（真实 API 调用；S8 视沙箱配置自动跳过）
   python scripts/smoke.py --list      # 只列出用例，零成本
   python scripts/smoke.py --only S1,S3
 """
@@ -44,7 +44,7 @@ def s1_stream(cfg):
         tools=None, system="你是简洁的技术讲解员。", on_text=seen.append)
     joined = "".join(seen)
     deltas = len(seen)
-    ok_concat = bool(resp.text) and resp.text == joined
+    ok_concat = bool(resp.text) and resp.text == joined.strip()   # P15 strip 归一后的新不变量
     passed = (deltas >= 3 and ok_concat
               and resp.stop_reason is StopReason.END_TURN
               and resp.prompt_tokens > 0 and resp.completion_tokens > 0)
@@ -133,12 +133,66 @@ def s5_chat_usage(cfg):
     return passed, note
 
 
+# ---------- S6 think 剥离（P15 真机回归） ----------
+
+def s6_think_stripped(cfg):
+    seen = []
+    t0 = time.monotonic()
+    resp = create_provider(cfg).chat_stream(
+        [UserMessage(content="请先逐步推理再作答：一个数加上它自己等于 14，这个数是多少？只回答数字")],
+        tools=None, system="你是严谨的推理助手。", on_text=seen.append)
+    joined = "".join(seen)
+    leaked = "<think>" in joined or bool(resp.text and "<think>" in resp.text)
+    passed = (not leaked and bool(resp.text) and "7" in resp.text
+              and resp.text == joined.strip())   # P15 strip 归一后的新不变量
+    note = (f"think 泄漏={leaked} · 拼接一致={resp.text == joined.strip()} · "
+            f"答对={'7' in (resp.text or '')} · {time.monotonic() - t0:.1f}s")
+    return passed, note
+
+
+# ---------- S8 沙箱冒烟（sandbox.mode: docker；P16 M1） ----------
+
+def s8_docker_sandbox(cfg):
+    if cfg.sandbox_mode != "docker":
+        return None, "SKIP：config.yaml 未配置 sandbox.mode: docker"
+    from agent.sandbox import probe_docker
+    if not probe_docker():
+        return None, "SKIP：docker 不可用（守护进程未运行或未安装）"
+    from main import _env_note, _setup_sandbox
+    with tempfile.TemporaryDirectory() as ws:
+        set_root(ws)   # 必须在 _setup_sandbox 之前：容器挂载点取当时的工作区
+        docker_exec = _setup_sandbox(cfg, "smoke")
+        try:
+            loop = new_loop(cfg)
+            loop.system += _env_note(docker=True)
+
+            result = loop.run("用 Bash 执行 echo sandbox-ok，然后把输出原样告诉我。")
+            a = "sandbox-ok" in result
+
+            probe = os.path.join(ws, ".sandbox_probe.txt")
+            with open(probe, "w", encoding="utf-8") as f:
+                f.write("probe-7749")
+            result = loop.run("用 Bash 读取 /workspace/.sandbox_probe.txt 的内容，原样告诉我。")
+            b = "probe-7749" in result
+
+            result = loop.run("用 Bash 检查当前环境能否访问外网"
+                              "（如 curl -m 5 https://example.com），只回答两个字：通 或 不通。")
+            c = "不通" in result
+
+            note = f"容器执行={a} · 工作区互通={b} · 出网被拒={c}"
+            return (a and b and c), note
+        finally:
+            docker_exec.stop()
+
+
 CASES = [
     ("S1", "流式长回答（增量/拼接/usage）", s1_stream),
     ("S2", "工具往返（Write→Read）", s2_tool_roundtrip),
     ("S3", "参数校验自愈（timeout 传坏值）", s3_validation_selfheal),
     ("S4", "强制压缩（context_window=3000）", s4_forced_compact),
     ("S5", "非流式 usage 统计", s5_chat_usage),
+    ("S6", "think 剥离回归（P15）", s6_think_stripped),
+    ("S8", "沙箱冒烟（容器执行/工作区互通/出网被拒）", s8_docker_sandbox),
 ]
 
 
@@ -176,13 +230,19 @@ def main() -> int:
             passed, note = fn(cfg)
         except Exception as e:
             passed, note = False, f"异常 {type(e).__name__}: {e}"
-        mark = "PASS" if passed else "FAIL"
+        mark = "SKIP" if passed is None else ("PASS" if passed else "FAIL")
         print(f"  {mark} · {note} · 总耗时 {time.monotonic() - t0:.1f}s")
         results.append((name, passed))
 
-    failed = [n for n, p in results if not p]
-    print(f"\n[smoke] 汇总：{len(results) - len(failed)}/{len(results)} 通过"
-          + (f"；失败：{', '.join(failed)}" if failed else ""))
+    failed = [n for n, p in results if p is False]
+    skipped = [n for n, p in results if p is None]
+    ran = len(results) - len(skipped)
+    line = f"\n[smoke] 汇总：{ran - len(failed)}/{ran} 通过"
+    if skipped:
+        line += f"（{len(skipped)} 跳过：{', '.join(skipped)}）"
+    if failed:
+        line += f"；失败：{', '.join(failed)}"
+    print(line)
     return 1 if failed else 0
 
 

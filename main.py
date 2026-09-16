@@ -12,6 +12,7 @@ from agent.loop import AgentLoop
 from agent.permissions import PermissionGate
 from agent.providers import create_provider
 from agent.providers.retry import AgentError
+from agent.sandbox import DockerExecutor, probe_docker, set_executor
 from agent.session import (
     SessionError,
     list_sessions,
@@ -19,9 +20,36 @@ from agent.session import (
     new_session_id,
     save_session,
 )
+from agent.tools.bash import refresh_description
 from agent.tools.workspace import get_root, set_root
 
 OLD_SESSION = ".agent/session.json"   # P6 初版单文件，已停用
+
+
+def _setup_sandbox(cfg, sid: str):
+    """装配沙箱执行器：docker 模式返回 executor（供会话结束清理），none 返回 None。"""
+    if cfg.sandbox_mode != "docker":
+        return None
+    if not probe_docker():
+        raise SystemExit("[sandbox] 配置了 sandbox.mode=docker 但 docker 不可用："
+                         "请确认 Docker 已安装并正在运行（Windows 需 Docker Desktop/WSL2）")
+    executor = DockerExecutor(name=f"agent-sandbox-{sid}", image=cfg.sandbox_image,
+                              workspace_host=get_root(), memory=cfg.sandbox_memory,
+                              cpus=cfg.sandbox_cpus)
+    set_executor(executor)
+    refresh_description()
+    return executor
+
+
+def _env_note(docker: bool, nt: bool = os.name == "nt") -> str:
+    """运行时注入 system prompt 的环境说明行（system_v2 起不再硬编码在 prompt 文件里）。"""
+    if docker:
+        return ("\n  - 运行环境：Bash 命令在 Linux 容器内执行（sh，无网络），"
+                "宿主工作区挂载于 /workspace；所有工具统一用 /workspace/... 路径"
+                "（文件工具会自动映射到宿主工作区）")
+    if nt:
+        return "\n  - 运行环境：Windows，Bash 命令走 cmd.exe，优先使用跨平台命令"
+    return "\n  - 运行环境：Linux/macOS，Bash 命令走 POSIX shell"
 
 
 def _hint_resume():
@@ -65,91 +93,103 @@ def start_loop():
     sys.stderr.reconfigure(encoding="utf-8")
     cfg = load_config()
     set_root(cfg.workspace_root or os.getcwd())
-    gate = PermissionGate(cfg.permission_mode)
+    gate = PermissionGate(cfg.permission_mode, sandbox_trusted=cfg.sandbox_trusted)
     sid = new_session_id()
-    journal = Journal.daily() if cfg.journal else None
+    docker_exec = _setup_sandbox(cfg, sid)
+    journal = Journal.daily(keep_days=cfg.journal_keep_days) if cfg.journal else None
     loop = AgentLoop(create_provider(cfg), prompt_version=cfg.prompt_version,
                      max_turns=cfg.max_turns, token_budget=cfg.token_budget,
                      permission_gate=gate, context_window=cfg.context_window, compact_threshold=cfg.compact_threshold,
                      keep_recent=cfg.keep_recent, journal=journal
                      )
+    if docker_exec:
+        loop.system += _env_note(docker=True)
+    else:
+        loop.system += _env_note(docker=False)
     print(f"[agent] provider={cfg.provider} model={cfg.model} 权限={gate.mode.value}（/help 查看命令）")
     print(f"[agent] 工作区={get_root()}（Write/Edit 仅限此目录内）")
+    if docker_exec:
+        print(f"[agent] 沙箱=docker（{cfg.sandbox_image}，trusted={cfg.sandbox_trusted}）"
+              f"容器 {docker_exec.name}，退出时自动清理")
     print(f"[agent] 本次会话 {sid}")
     _hint_resume()
-    while True:
-        try:
-            user_input = prompt("> ").strip()
-        except (KeyboardInterrupt, EOFError):
-            print("\n[agent] 再见")
-            return
-        if not user_input:
-            continue
-        if user_input in ("/exit", "/quit"):
-            return
-        if user_input == "/help":
-            print("[命令] /help 命令列表 · /stats 会话统计 · /resume [编号|ID前缀] 恢复会话\n"
-                  "        /permission [default/acceptEdits/bypass] 查看/切换权限 · /exit 退出")
-            continue
-        if user_input == "/stats":
-            tools = " ".join(f"{k}×{v}" for k, v in sorted(loop.tool_calls.items())) or "无"
-            print(f"[stats] 本次进程：任务 {loop.tasks_total} 个 · "
-                  f"工具 {sum(loop.tool_calls.values())} 次（{tools}）")
-            print(f"        压缩 {loop.compact_count} 次 · "
-                  f"累计 ↑{loop.total_prompt_tokens} ↓{loop.total_completion_tokens} tokens")
-            continue
-        if user_input == "/resume":
-            picked = _pick_session()
-            if picked:
-                try:
-                    sid = _apply_resume(loop, picked)   # 恢复后续写原会话
-                    print(f"[agent] 已恢复会话 {sid}（{len(loop.messages)} 条，统计与权限记忆不保留）")
-                except (OSError, SessionError) as e:
-                    print(f"[agent] 恢复失败: {e}")
-            continue
-        if user_input.startswith("/resume "):
-            prefix = user_input.split(maxsplit=1)[1].strip()
-            hits = [s for s in list_sessions()
-                    if not s["corrupt"] and s["id"].startswith(prefix)]
-            if len(hits) == 1:
-                try:
-                    sid = _apply_resume(loop, hits[0])
-                    print(f"[agent] 已恢复会话 {sid}（{len(loop.messages)} 条）")
-                except (OSError, SessionError) as e:
-                    print(f"[agent] 恢复失败: {e}")
-            elif not hits:
-                print("[agent] 没有匹配的会话")
-            else:
-                print(f"[agent] 前缀匹配 {len(hits)} 个会话，请用 /resume 编号选择")
-            continue
-        if user_input == "/permission":
-            print(f"当前权限模式: {gate.mode.value}（可选 default/acceptEdits/bypass）")
-            continue
-        if user_input.startswith("/permission "):
+    try:
+        while True:
             try:
-                gate.set_mode(user_input.split(maxsplit=1)[1].strip())
-                print(f"[agent] 权限模式已切换: {gate.mode.value}")
-            except ValueError:
-                print("[agent] 未知模式，可选 default/acceptEdits/bypass")
-            continue
-        try:
-            result = loop.run(user_input)
-            if not loop.last_streamed:
-                print(result)   # 流式回合已逐段打印过，不再重印全文
-            p, c, s = loop.last_usage
-            print(f"  \n[stats] 本次 ↑{p} ↓{c} · {s:.1f}s"
-                  f" | 累计 ↑{loop.total_prompt_tokens} ↓{loop.total_completion_tokens}")
-        except KeyboardInterrupt:  # 必须在 except Exception 之前
-            print("\n[agent] 任务已打断，会话历史保留（提示符处 Ctrl+C 退出）")
-        except AgentError as e:
-            print(f"[错误] {e}")
-        except Exception as e:  # 粗捕获保进程
-            print(f"[错误] {type(e).__name__}: {e}")
-        if cfg.save_session:  # 正常/打断/报错三种结局都保存
+                user_input = prompt("> ").strip()
+            except (KeyboardInterrupt, EOFError):
+                print("\n[agent] 再见")
+                return
+            if not user_input:
+                continue
+            if user_input in ("/exit", "/quit"):
+                return
+            if user_input == "/help":
+                print("[命令] /help 命令列表 · /stats 会话统计 · /resume [编号|ID前缀] 恢复会话\n"
+                      "        /permission [default/acceptEdits/bypass] 查看/切换权限 · /exit 退出")
+                continue
+            if user_input == "/stats":
+                tools = " ".join(f"{k}×{v}" for k, v in sorted(loop.tool_calls.items())) or "无"
+                print(f"[stats] 本次进程：任务 {loop.tasks_total} 个 · "
+                      f"工具 {sum(loop.tool_calls.values())} 次（{tools}）")
+                print(f"        压缩 {loop.compact_count} 次 · "
+                      f"累计 ↑{loop.total_prompt_tokens} ↓{loop.total_completion_tokens} tokens")
+                continue
+            if user_input == "/resume":
+                picked = _pick_session()
+                if picked:
+                    try:
+                        sid = _apply_resume(loop, picked)   # 恢复后续写原会话
+                        print(f"[agent] 已恢复会话 {sid}（{len(loop.messages)} 条，统计与权限记忆不保留）")
+                    except (OSError, SessionError) as e:
+                        print(f"[agent] 恢复失败: {e}")
+                continue
+            if user_input.startswith("/resume "):
+                prefix = user_input.split(maxsplit=1)[1].strip()
+                hits = [s for s in list_sessions()
+                        if not s["corrupt"] and s["id"].startswith(prefix)]
+                if len(hits) == 1:
+                    try:
+                        sid = _apply_resume(loop, hits[0])
+                        print(f"[agent] 已恢复会话 {sid}（{len(loop.messages)} 条）")
+                    except (OSError, SessionError) as e:
+                        print(f"[agent] 恢复失败: {e}")
+                elif not hits:
+                    print("[agent] 没有匹配的会话")
+                else:
+                    print(f"[agent] 前缀匹配 {len(hits)} 个会话，请用 /resume 编号选择")
+                continue
+            if user_input == "/permission":
+                print(f"当前权限模式: {gate.mode.value}（可选 default/acceptEdits/bypass）")
+                continue
+            if user_input.startswith("/permission "):
+                try:
+                    gate.set_mode(user_input.split(maxsplit=1)[1].strip())
+                    print(f"[agent] 权限模式已切换: {gate.mode.value}")
+                except ValueError:
+                    print("[agent] 未知模式，可选 default/acceptEdits/bypass")
+                continue
             try:
-                save_session(sid, loop.messages)
-            except OSError as e:
-                print(f"[agent] ⚠ 会话保存失败: {e}")
+                result = loop.run(user_input)
+                if not loop.last_streamed:
+                    print(result)   # 流式回合已逐段打印过，不再重印全文
+                p, c, s = loop.last_usage
+                print(f"  \n[stats] 本次 ↑{p} ↓{c} · {s:.1f}s"
+                      f" | 累计 ↑{loop.total_prompt_tokens} ↓{loop.total_completion_tokens}")
+            except KeyboardInterrupt:  # 必须在 except Exception 之前
+                print("\n[agent] 任务已打断，会话历史保留（提示符处 Ctrl+C 退出）")
+            except AgentError as e:
+                print(f"[错误] {e}")
+            except Exception as e:  # 粗捕获保进程
+                print(f"[错误] {type(e).__name__}: {e}")
+            if cfg.save_session:  # 正常/打断/报错三种结局都保存
+                try:
+                    save_session(sid, loop.messages)
+                except OSError as e:
+                    print(f"[agent] ⚠ 会话保存失败: {e}")
+    finally:
+        if docker_exec:
+            docker_exec.stop()
 
 
 if __name__ == '__main__':

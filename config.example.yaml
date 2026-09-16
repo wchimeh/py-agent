@@ -21,11 +21,20 @@ compact_threshold: 0.8   # 估算占比超过即触发压缩
 keep_recent: 3           # 压缩时保留最近 N 条消息
 
 # 可观测性
-journal: true        # 结构化 JSONL 日志到 .agent/logs/
-save_session: true   # 任务结束自动保存会话到 .agent/sessions/
+journal: true            # 结构化 JSONL 日志到 .agent/logs/
+journal_keep_days: 30    # 日志按天轮转保留天数（0 = 不清理）
+save_session: true       # 任务结束自动保存会话到 .agent/sessions/
 
 # 工作区
 workspace_root: ""   # 留空 = 启动目录；Write/Edit 只允许写此目录内（硬边界，bypass 也不例外）
+
+# 沙箱（仅罩 Bash 工具；文件工具走宿主路径硬限 + 权限门）
+sandbox:
+  mode: none                 # none = 宿主直接执行；docker = 长驻受限容器内执行（需 Docker）
+  image: python:3.12-slim
+  trusted: false             # docker 模式下非危险 Bash 免审批；危险命令模式仍询问
+  memory: 2g
+  cpus: 2.0
 
 # Prompt 版本（缺省 = 最新版；agent/prompts/system_v{N}.md 文件即版本）
 # prompt_version: 1

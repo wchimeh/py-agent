@@ -3,7 +3,11 @@
 # @DateTime: 2026/03/15/15:08
 import json
 import os
-from datetime import datetime
+import re
+from contextlib import suppress
+from datetime import datetime, timedelta
+
+_DATE_FILE = re.compile(r"^(\d{8})\.jsonl$")
 
 
 class Journal:
@@ -22,9 +26,22 @@ class Journal:
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
 
     @classmethod
-    def daily(cls, dir_: str = ".agent/logs") -> "Journal":
+    def daily(cls, dir_: str = ".agent/logs", keep_days: int = 30) -> "Journal":
         os.makedirs(dir_, exist_ok=True)
+        cls._rotate(dir_, keep_days)
         return cls(os.path.join(dir_, f"{datetime.now():%Y%m%d}.jsonl"))
+
+    @staticmethod
+    def _rotate(dir_: str, keep_days: int) -> None:
+        """删除 keep_days 天前的日志文件；只动 YYYYMMDD.jsonl 命中的文件（keep_days=0 不清理）。"""
+        if keep_days <= 0:
+            return
+        cutoff = (datetime.now() - timedelta(days=keep_days)).strftime("%Y%m%d")
+        for name in os.listdir(dir_):
+            m = _DATE_FILE.match(name)
+            if m and m.group(1) < cutoff:
+                with suppress(OSError):   # 清理失败不影响主流程
+                    os.remove(os.path.join(dir_, name))
 
 
 

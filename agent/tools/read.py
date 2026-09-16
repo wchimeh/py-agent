@@ -5,6 +5,7 @@ import os
 from itertools import islice
 from typing import ClassVar
 
+from . import workspace
 from .base import Tool, ToolError
 from .registry import register
 
@@ -24,6 +25,7 @@ class ReadTool(Tool):
     }
 
     def execute(self, file_path: str, offset: int = 1, limit: int = 2000) -> str:
+        file_path = workspace.map_path(file_path)
         if not os.path.isfile(file_path):
             raise ToolError(f"文件不存在：{file_path}")
         # 懒读取：只取 offset/limit 窗口内的行，超大文件不再整读进内存

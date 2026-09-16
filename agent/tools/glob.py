@@ -5,6 +5,7 @@ import fnmatch
 import os
 from typing import ClassVar
 
+from . import workspace
 from .base import SKIP_DIRS, Tool
 from .registry import register
 
@@ -40,7 +41,7 @@ class GlobTool(Tool):
     def execute(self, pattern: str, path: str = ".") -> str:
         pattern = pattern.replace("\\", "/").lstrip("/")
         pat_parts = pattern.split("/")
-        root = os.path.abspath(path)
+        root = os.path.abspath(workspace.map_path(path))
         hits: list[tuple[float, str]] = []
         for dirpath, dirnames, filenames in os.walk(root):
             rel_dir = os.path.relpath(dirpath, root)

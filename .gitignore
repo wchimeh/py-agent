@@ -18,3 +18,4 @@ dist/
 .venv-ci/
 .idea/
 .pytest_cache/
+.coverage

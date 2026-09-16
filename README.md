@@ -12,9 +12,12 @@
 - **流式输出**：回答逐段实时上屏；流式重试、跨 chunk 工具参数拼接、服务端不支持时自动降级非流式
 - **上下文管理**：真实 token 锚点 + 增量估算，接近窗口上限自动摘要压缩（保 Anthropic tool_use 配对），摘要失败降级截断
 - **权限门控**：default / acceptEdits / bypass 三模式，危险命令模式命中强制询问，会话级总是允许/拒绝记忆
-- **工作区硬边界**：Write/Edit 只允许写工作区内（`..` 逃逸、异盘、symlink 外指一律拒绝，bypass 不豁免）
+- **工作区硬边界**：Write/Edit 只允许写工作区内（`..` 逃逸、异盘、symlink 外指一律拒绝，bypass 不豁免）；docker 模式下 `/workspace/...` 容器路径自动映射到宿主工作区根
+- **命令沙箱（可选）**：`sandbox.mode: docker` 时 Bash 在长驻 Linux 容器内执行（无网络、内存/CPU/PID 上限、cap-drop ALL），会话结束自动清理容器；`sandbox.trusted: true` 时非危险命令免询问，危险模式仍弹（工作区是 rw 挂载）
+- **注入防御**：system prompt v2 将"工具读入的外部内容"明确定义为不可信数据；环境说明运行时注入（去硬编码）
 - **会话持久化**：任务结束自动保存，`/resume` 编号或 ID 前缀恢复历史续聊，损坏文件隔离不炸列表
-- **可观测性**：JSONL 结构化日志（llm/tool/compact/权限事件）、`/stats` 任务与 token 统计
+- **可观测性**：JSONL 结构化日志（llm/tool/compact/权限事件）、按天轮转（默认保留 30 天）、`/stats` 任务与 token 统计
+- **token 估算校准**：首个真实响应后按真实/朴素比值校准（clamp 0.5~3.0），逐步贴近真实 tokenizer
 - **可靠性**：指数退避+抖动重试、超时控制、Ctrl+C 打断保留会话、原子写防半写损坏
 
 ## 快速开始
@@ -58,9 +61,14 @@ agent        # 启动；pytest 跑测试
 | `compact_threshold` | `0.8` | 估算占比超过即触发压缩（0~1） |
 | `keep_recent` | `8` | 压缩时保留最近 N 条消息（≥2） |
 | `journal` | `true` | JSONL 日志到 `.agent/logs/` |
+| `journal_keep_days` | `30` | 日志保留天数，`0` = 不清理；按 `^\d{8}\.jsonl$` 删除过期文件（会话不受影响） |
 | `save_session` | `true` | 任务结束自动保存会话到 `.agent/sessions/` |
 | `workspace_root` | `""` | 工作区根，留空 = 启动目录；Write/Edit 硬边界 |
-| `prompt_version` | 最新版 | pin 系统提示词版本（`agent/prompts/system_v{N}.md` 文件即版本） |
+| `sandbox.mode` | `none` | 命令沙箱：`none`（宿主直跑）/ `docker`（容器内执行） |
+| `sandbox.image` | `python:3.12-slim` | docker 模式使用的镜像 |
+| `sandbox.trusted` | `false` | docker 模式下，非危险 Bash 命令是否免审批（危险模式仍询问） |
+| `sandbox.memory` / `sandbox.cpus` | `2g` / `2.0` | docker 容器内存与 CPU 上限 |
+| `prompt_version` | 最新版 | pin 系统提示词版本（`agent/prompts/system_v{N}.md` 文件即版本；当前 v2 默认含注入防御） |
 
 ## 使用说明
 
@@ -82,24 +90,30 @@ REPL 内命令：
 
 **危险命令防护**：`rm -rf`、`del /s`、`format`、`git push --force`、下载内容直接进 shell 等模式命中时，即使已有会话记忆也强制重新询问（防借道绕过）。
 
+**docker 沙箱**：Bash 在容器内执行（无网络/资源上限），退出时自动清理。`sandbox.trusted: true` 时普通命令免询问，危险命令仍询问——因为工作区是 rw 挂载，`rm -rf /workspace` 真能删宿主文件。
+
 **打断**：任务执行中 Ctrl+C 打断当前任务、历史完整保留，提示符处再 Ctrl+C 退出。
 
 ## 项目结构
 
 ```
-main.py            入口 + REPL
+main.py            入口 + REPL（含沙箱装配与环境说明注入）
 .github/
-  workflows/ci.yml CI 门禁（lint + 测试矩阵 + 打包安装验证）
+  workflows/ci.yml CI 门禁（ruff + 测试矩阵 + wheel 安装 + 覆盖率门禁）
+  workflows/release.yml tag v* 触发构建并发布 GitHub Release
 agent/
   loop.py          Agentic 主循环（流式接入、压缩触发、预算防线）
   providers/       双协议接入（base 抽象 + anthropic/openai + 重试装饰）
-  tools/           六工具 + 注册表 + workspace 路径边界
-  permissions.py   权限三模式 + 危险命令模式
-  context.py       token 估算 + 自动压缩（锚点校准、配对切分）
+  tools/           六工具 + 注册表 + workspace 路径边界（docker /workspace 自动映射）
+  sandbox.py       命令沙箱（LocalExecutor + DockerExecutor + 探测 + trusted 判定）
+  permissions.py   权限三模式 + 危险命令模式 + trusted 免审批
+  context.py       token 估算 + 首次响应后按模型校准（ratio clamp）
   session.py       多会话持久化（原子写、损坏隔离）
-  journal.py       JSONL 事件日志
+  journal.py       JSONL 事件日志 + 按天轮转（keep_days）
+  prompts/         system prompt 文件即版本（v1 旧版 + v2 默认含注入防御）
   spinner.py       等待动画（首个流式增量即停）
-tests/             166 项单测，全程零网络
+tests/             235 项单测 + 4 docker 集成 skipif，全程零网络
+CHANGELOG.md       版本历史（Keep-a-Changelog）
 ```
 
 ## 开发
@@ -113,12 +127,12 @@ ruff check .          # lint（版本锁定 0.16.7，与 CI 一致）
 真实模型冒烟（产生 API 费用，显式运行才会花钱）：
 
 ```bash
-python scripts/smoke.py            # 5 用例全量；--list 只看清单；--only S1,S3 选择执行
+python scripts/smoke.py            # 7 用例全量；--list 只看清单；--only S1,S3 选择执行；S8 视 docker 配置自动 SKIP
 ```
 
-CI（GitHub Actions）：push / PR 自动跑 ruff lint + 测试矩阵（ubuntu × Python 3.10~3.13、Windows/macOS × 3.13）+ wheel 构建与安装态验证。
+CI（GitHub Actions）：push / PR 自动跑 ruff lint + 测试矩阵（ubuntu × Python 3.10~3.13、Windows/macOS × 3.13）+ wheel 构建与安装态验证 + 覆盖率门禁（≥85% branch）。打 `v*` tag 自动构建并发布 GitHub Release 附 wheel/sdist（不发 PyPI，凭据需手动 `twine upload`）。
 
-各阶段设计决策与风险记录为本地开发文档（`docs/PLAN.md`、`docs/DEV_P*.md`，**不入库**，克隆者不可见）。
+各阶段设计决策与风险记录为本地开发文档（`docs/PLAN.md`、`docs/DEV_P*.md`，**不入库**，克隆者不可见）。完整版本历史见 [CHANGELOG.md](CHANGELOG.md)。
 
 ## 安全注意事项
 
@@ -129,6 +143,8 @@ CI（GitHub Actions）：push / PR 自动跑 ruff lint + 测试矩阵（ubuntu �
 
 ## 已知局限（路线图）
 
-- 无命令沙箱：Bash 以当前用户权限执行，真沙箱（容器 / Job Object）在远期规划
-- 日志按日分文件、不自动轮转；无成本核算（token × 单价）
+- docker exec 超时后容器内残留进程可能存活，由 `--pids-limit 256` 与会话结束销毁容器兜底
+- 工作区是 rw 挂载：容器内 `rm -rf /workspace` 真删宿主文件——所以 docker 模式下危险命令仍询问（已在设计文档声明）
+- 注入防御是 prompt 级"软防御"，拦不住铁了心配合注入的模型；结构性防御（内容标记/工具结果隔离）未做
 - 权限粒度为工具级（Bash 按首命令记忆），暂无前缀规则细化
+- 无成本核算（token × 单价）；macOS 路径未真机验证（CI 含其测试矩阵但非真机）

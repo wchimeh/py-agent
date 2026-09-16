@@ -1,0 +1,40 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write   # 创建 GitHub Release 所需
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: 校验 tag 与 pyproject 版本一致
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          PKG=$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+          if [ "$TAG" != "$PKG" ]; then
+            echo "tag v$TAG 与 pyproject version $PKG 不一致"; exit 1
+          fi
+
+      - run: pip install build
+      - run: python -m build
+
+      - name: wheel 安装态验证
+        run: |
+          pip install dist/*.whl
+          cd /tmp   # 离开仓库目录，防本地 agent/ 遮蔽 site-packages
+          python -c "from agent.prompts import load_system_prompt; s = load_system_prompt(); assert len(s) > 0; print('wheel install OK')"
+
+      - name: 创建 GitHub Release（附 wheel/sdist）
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true

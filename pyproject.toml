@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "coding-agent"
-version = "0.8.0"
+version = "1.0.0"
 description = "类 Claude Code 的终端编码 Agent：双协议接入、工具调用、上下文压缩、权限门控、流式输出"
 requires-python = ">=3.10"
 dependencies = [
@@ -16,7 +16,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=9.1.1", "ruff==0.16.7", "httpx>=0.28.1"]
+dev = ["pytest>=9.1.1", "ruff==0.16.7", "httpx>=0.28.1", "pytest-cov>=6.0"]
 
 [project.scripts]
 agent = "main:start_loop"
@@ -39,3 +39,7 @@ target-version = "py310"
 select = ["E4", "E7", "E9", "F", "I", "UP", "B", "SIM", "RUF"]
 # 中文项目：全角标点（，：；）在注释/字符串/文档里被误报为歧义字符
 ignore = ["RUF001", "RUF002", "RUF003"]
+
+[tool.coverage.run]
+branch = true
+# 门禁阈值 85：2026-09-16 实测基线 88%（main.py 23% 属 REPL 交互主体，预期不可测）

@@ -64,6 +64,51 @@ def test_journal_daily_creates_dated_file(tmp_path):
     assert files == [f"{datetime.now():%Y%m%d}.jsonl"]
 
 
+# ---------- P16 M4：按天轮转（只删目录内 YYYYMMDD.jsonl 命中的过期文件） ----------
+
+from datetime import timedelta  # noqa: E402
+
+
+def _touch_day(tmp_path, days_ago: int):
+    name = f"{datetime.now() - timedelta(days=days_ago):%Y%m%d}.jsonl"
+    (tmp_path / name).write_text("{}\n", encoding="utf-8")
+    return name
+
+
+def test_journal_daily_rotates_expired_logs(tmp_path):
+    old = _touch_day(tmp_path, 5)
+    yday = _touch_day(tmp_path, 1)
+    (tmp_path / "not-a-log.txt").write_text("x", encoding="utf-8")
+    (tmp_path / "irregular.jsonl").write_text("x", encoding="utf-8")   # 不匹配日期模式
+    j = Journal.daily(str(tmp_path), keep_days=1)
+    names = set(os.listdir(tmp_path))
+    assert old not in names                       # 窗口外删除
+    assert yday in names                          # 窗口内保留
+    assert j.path.endswith(f"{datetime.now():%Y%m%d}.jsonl")   # 今日文件为目标
+    assert "not-a-log.txt" in names and "irregular.jsonl" in names
+
+
+def test_journal_daily_keep_days_zero_disables(tmp_path):
+    ancient = _touch_day(tmp_path, 365)
+    Journal.daily(str(tmp_path), keep_days=0)
+    assert (tmp_path / ancient).exists()
+
+
+def test_journal_daily_default_window_30_days(tmp_path):
+    out31 = _touch_day(tmp_path, 31)
+    in29 = _touch_day(tmp_path, 29)
+    Journal.daily(str(tmp_path))
+    assert not (tmp_path / out31).exists() and (tmp_path / in29).exists()
+
+
+def test_config_journal_keep_days(tmp_path):
+    from agent.config import load_config
+    p = tmp_path / "config.yaml"
+    p.write_text("journal_keep_days: 7\n", encoding="utf-8")
+    assert load_config(str(p)).journal_keep_days == 7
+    assert load_config(str(tmp_path / "none.yaml")).journal_keep_days == 30   # 缺省
+
+
 # ---------- loop 埋点 ----------
 
 def test_loop_journal_event_sequence(tmp_path):

@@ -7,6 +7,7 @@ from enum import Enum
 
 from prompt_toolkit import prompt
 
+from . import sandbox
 from .providers.base import ToolCall
 
 
@@ -56,9 +57,11 @@ def default_ask(tc: ToolCall, danger: str | None) -> str:
 
 class PermissionGate:
 
-    def __init__(self, mode: str | PermissionMode = PermissionMode.DEFAULT, ask_fn=default_ask):
+    def __init__(self, mode: str | PermissionMode = PermissionMode.DEFAULT, ask_fn=default_ask,
+                 sandbox_trusted: bool = False):
         self.mode = PermissionMode(mode)  # 非法值抛 ValueError，由 main 捕获提示
         self.ask_fn = ask_fn
+        self.sandbox_trusted = sandbox_trusted  # docker 沙箱内非危险 Bash 免审批
         self.always: set[str] = set()  # 会话内总是允许
         self.never: set[str] = set()  # 会话内总是拒绝
 
@@ -84,6 +87,12 @@ class PermissionGate:
         # 危险命令在会话记忆之前检查：防止 a 允许 cd 后，cd .. && del /s 借道直通
         danger = match_danger(str(tc.arguments.get("command", ""))) if tc.name == "Bash" else None
         if key in self.always and not danger:
+            return True, ""
+
+        # docker 沙箱内非危险 Bash 免审批（借鉴 Claude Code autoAllowBashIfSandboxed）。
+        # 危险命令不豁免：工作区是 rw 挂载，rm -rf /workspace 真能删宿主文件。
+        if (tc.name == "Bash" and self.sandbox_trusted and not danger
+                and isinstance(sandbox.get_executor(), sandbox.DockerExecutor)):
             return True, ""
 
         if tc.name in EDIT_TOOLS:

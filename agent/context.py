@@ -40,10 +40,13 @@ def estimate_message_tokens(msg: Message) -> int:
 class ContextTracker:
     """
     真实锚点 + 增量估算：每次响应后锚定，之后只估算新增消息。
+    锚定时按 真实 usage / 朴素估算 计算校准系数 ratio（钳制 0.5~3.0），
+    增量部分乘 ratio——不同模型 tokenizer 特性差异由此吸收。
     """
     def __init__(self):
         self.anchor_tokens = 0
         self.anchor_len = 0
+        self.ratio = 1.0
 
     def update_anchor(self, resp: LLMResponse, messages: list[Message]) -> None:
         """
@@ -52,6 +55,8 @@ class ContextTracker:
         """
         if resp.prompt_tokens <= 0:
             return
+        naive = sum(estimate_message_tokens(m) for m in messages)
+        self.ratio = min(3.0, max(0.5, resp.prompt_tokens / max(1, naive)))
         self.anchor_tokens = resp.prompt_tokens
         self.anchor_len = len(messages)
 
@@ -61,13 +66,14 @@ class ContextTracker:
         """
         self.anchor_tokens = 0
         self.anchor_len = 0
+        self.ratio = 1.0
 
     def estimate(self, messages: list[Message]) -> int:
         """
-        计算当前轮 + 增量估算
+        计算当前轮 + 增量估算（增量乘校准系数）
         """
         extra = sum(estimate_message_tokens(m) for m in messages[self.anchor_len:])
-        return self.anchor_tokens + extra
+        return self.anchor_tokens + int(extra * self.ratio)
 
 
 def split_for_compact(messages: list[Message], keep_recent: int) -> tuple[list[Message], list[Message]]:
