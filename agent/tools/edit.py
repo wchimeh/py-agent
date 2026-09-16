@@ -1,8 +1,9 @@
-# -*- coding: utf-8 -*-
 # @File:     edit.py
 # @Author:   mjh
 # @DateTime: 2026/03/14/16:57
 import os
+from typing import ClassVar
+
 from .base import Tool, ToolError
 from .registry import register
 from .workspace import WorkspaceError, resolve_writable
@@ -14,7 +15,7 @@ class EditTool(Tool):
     description = ("精确字符串替换。old_string 必须与文件内容完全一致且唯一；"
                    "不唯一时增加上下文，或 replace_all=true。"
                    "仅允许编辑工作区内文件，越界直接报错。")
-    parameters = {
+    parameters: ClassVar[dict] = {
         "type": "object",
         "properties": {
             "file_path": {"type": "string"},
@@ -30,10 +31,11 @@ class EditTool(Tool):
         try:
             target = resolve_writable(file_path)
         except WorkspaceError as e:
-            raise ToolError(str(e))
+            raise ToolError(str(e)) from e
         if not os.path.isfile(target):
             raise ToolError(f"文件不存在：{target}")
-        text = open(target, encoding="utf-8").read()
+        with open(target, encoding="utf-8") as f:
+            text = f.read()
         n = text.count(old_string)
         if n == 0:
             raise ToolError("old_string 未找到，请先 Read 确认原文（注意空白与缩进）")

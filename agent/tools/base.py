@@ -1,8 +1,8 @@
-# -*- coding: utf-8 -*-
 # @File:     base.py
 # @Author:   mjh
 # @DateTime: 2026/03/14/16:35
 from abc import ABC, abstractmethod
+from typing import ClassVar
 
 
 class ToolError(Exception):
@@ -16,7 +16,7 @@ SKIP_DIRS = {".git", ".venv", "__pycache__", "node_modules", ".idea"}
 class Tool(ABC):
     name: str = ""
     description: str = ""
-    parameters: dict = {}
+    parameters: ClassVar[dict] = {}
 
     @abstractmethod
     def execute(self, **kwargs) -> str:

@@ -1,13 +1,22 @@
-# -*- coding: utf-8 -*-
 # @File:     test_context.py
 # @Author:   mjh
 # @DateTime: 2026/03/15
 """P5 上下文管理单测：token 估算、锚点校准、切分配对。"""
-from agent.providers.base import (AssistantMessage, StopReason, ToolCall,
-                                  ToolResultMessage, UserMessage, LLMResponse)
-from agent.context import (ContextTracker, estimate_message_tokens,
-                           estimate_tokens, render_for_summary,
-                           split_for_compact)
+from agent.context import (
+    ContextTracker,
+    estimate_message_tokens,
+    estimate_tokens,
+    render_for_summary,
+    split_for_compact,
+)
+from agent.providers.base import (
+    AssistantMessage,
+    LLMResponse,
+    StopReason,
+    ToolCall,
+    ToolResultMessage,
+    UserMessage,
+)
 
 
 def _resp(prompt=0, completion=0):

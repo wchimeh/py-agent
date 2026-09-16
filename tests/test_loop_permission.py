@@ -1,12 +1,12 @@
-# -*- coding: utf-8 -*-
 # @File:     test_loop_permission.py
 # @Author:   mjh
 # @DateTime: 2026/03/15
 """AgentLoop × PermissionGate 集成测试：拒绝回灌、bypass 直通、会话记忆跨任务。"""
-from agent.providers.base import LLMResponse, StopReason, ToolCall
+from test_loop import FakeProvider
+
 from agent.loop import AgentLoop
 from agent.permissions import PermissionGate
-from test_loop import FakeProvider
+from agent.providers.base import LLMResponse, StopReason, ToolCall
 
 
 def _write_call(path):
@@ -48,7 +48,8 @@ def test_bypass_writes_without_asking(ws, tmp_path):
     loop = AgentLoop(provider, max_turns=5, permission_gate=gate)
 
     loop.run("写文件")
-    assert open(target, encoding="utf-8").read() == "x"
+    with open(target, encoding="utf-8") as f:
+        assert f.read() == "x"
 
 
 def test_always_memory_across_tasks(ws, tmp_path):
@@ -67,8 +68,10 @@ def test_always_memory_across_tasks(ws, tmp_path):
 
     loop.run("任务1")
     loop.run("任务2")
-    assert open(f1, encoding="utf-8").read() == "x"
-    assert open(f2, encoding="utf-8").read() == "x"
+    with open(f1, encoding="utf-8") as f:
+        assert f.read() == "x"
+    with open(f2, encoding="utf-8") as f:
+        assert f.read() == "x"
     assert asked == ["Write"]                 # 只有第一次问了
     assert gate.always == {"Write"}
 

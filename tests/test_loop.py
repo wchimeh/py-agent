@@ -1,11 +1,10 @@
-# -*- coding: utf-8 -*-
 # @File:     test_loop.py
 # @Author:   mjh
 # @DateTime: 2026/03/14
 """AgentLoop 工具往返测试：FakeProvider 脚本化响应，全程无网络。"""
-from agent.providers.base import LLMResponse, StopReason, ToolCall
 from agent.loop import AgentLoop
 from agent.permissions import PermissionGate
+from agent.providers.base import LLMResponse, StopReason, ToolCall
 
 # bypass 模式 authorize 直接放行、不弹询问、无状态变更，可安全共享
 BYPASS_GATE = PermissionGate("bypass")
@@ -48,9 +47,53 @@ def test_roundtrip_executes_tool_and_finishes(ws, tmp_path):
     loop = AgentLoop(provider, max_turns=5, permission_gate=BYPASS_GATE)
 
     assert loop.run("写文件") == "写入完成"
-    assert open(target, encoding="utf-8").read() == "hello"
+    with open(target, encoding="utf-8") as f:
+        assert f.read() == "hello"
     # 消息序列：user → assistant(tool_use) → tool → assistant(text)
     assert [m.role for m in loop.messages] == ["user", "assistant", "tool", "assistant"]
+
+
+def test_journal_task_start_records_prompt_version():
+    class FakeJournal:
+        def __init__(self):
+            self.events = []
+
+        def log(self, event, **fields):
+            self.events.append((event, fields))
+
+    j = FakeJournal()
+    loop = AgentLoop(FakeProvider([_end_resp()]), permission_gate=BYPASS_GATE, journal=j)
+    loop.run("hi")
+    start = next(f for e, f in j.events if e == "task_start")
+    assert start["prompt"] == 1  # 默认最新版 system_v1
+
+
+class RecordingGate:
+    """记录 authorize 调用；合法/非法判定无关，只关心是否被触发"""
+
+    def __init__(self):
+        self.calls = []
+
+    def authorize(self, tc):
+        self.calls.append(tc.name)
+        return True, ""
+
+
+def test_malformed_tool_call_skips_permission_gate():
+    from agent.providers.base import MALFORMED_ARGS_KEY
+    gate = RecordingGate()
+    call = ToolCall(id="t1", name="Bash", arguments={MALFORMED_ARGS_KEY: "not json"})
+    loop = AgentLoop(FakeProvider([_tool_resp([call]), _end_resp()]), permission_gate=gate)
+    loop.run("hi")
+    assert gate.calls == []          # 畸形调用不弹权限
+    assert any(m.role == "tool" and m.is_error for m in loop.messages)
+
+def test_unknown_tool_skips_permission_gate():
+    gate = RecordingGate()
+    call = ToolCall(id="t1", name="NotExist", arguments={})
+    loop = AgentLoop(FakeProvider([_tool_resp([call]), _end_resp()]), permission_gate=gate)
+    loop.run("hi")
+    assert gate.calls == []          # 未知工具不弹权限，直接错误回灌
 
 
 def test_multiple_tool_calls_all_answered(ws, tmp_path):
@@ -66,8 +109,10 @@ def test_multiple_tool_calls_all_answered(ws, tmp_path):
     # 两个 tool_call 必须各有一条 tool_result 回灌
     assert [m.role for m in loop.messages] == \
         ["user", "assistant", "tool", "tool", "assistant"]
-    assert open(f1, encoding="utf-8").read() == "one"
-    assert open(f2, encoding="utf-8").read() == "two"
+    with open(f1, encoding="utf-8") as f:
+        assert f.read() == "one"
+    with open(f2, encoding="utf-8") as f:
+        assert f.read() == "two"
 
 
 def test_unknown_tool_error_fed_back_not_crash():

@@ -26,3 +26,6 @@ save_session: true   # 任务结束自动保存会话到 .agent/sessions/
 
 # 工作区
 workspace_root: ""   # 留空 = 启动目录；Write/Edit 只允许写此目录内（硬边界，bypass 也不例外）
+
+# Prompt 版本（缺省 = 最新版；agent/prompts/system_v{N}.md 文件即版本）
+# prompt_version: 1

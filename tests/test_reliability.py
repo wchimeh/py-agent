@@ -1,14 +1,12 @@
-# -*- coding: utf-8 -*-
 # @File:     test_reliability.py
 # @Author:   mjh
 # @DateTime: 2026/03/15
 """P3 可靠性测试：token 预算、预算内正常完成、Ctrl+C 打断后会话保留。"""
 import pytest
+from test_loop import BYPASS_GATE, FakeProvider
 
-from agent.providers.base import LLMResponse, StopReason, ToolCall
 from agent.loop import AgentLoop
-from agent.permissions import PermissionGate
-from test_loop import FakeProvider, BYPASS_GATE
+from agent.providers.base import LLMResponse, StopReason, ToolCall
 
 
 def _tool_call(**arguments):

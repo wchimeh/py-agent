@@ -1,11 +1,16 @@
-# -*- coding: utf-8 -*-
 # @File:     retry.py
 # @Author:   mjh
 # @DateTime: 2026/03/15/10:03
 import random
 import time
-from openai import APIConnectionError as OAIConn, APITimeoutError as OAITimeout, APIStatusError as OAIStatus
-from anthropic import APIConnectionError as AntConn, APITimeoutError as AntTimeout, APIStatusError as AntStatus
+
+from anthropic import APIConnectionError as AntConn
+from anthropic import APIStatusError as AntStatus
+from anthropic import APITimeoutError as AntTimeout
+from openai import APIConnectionError as OAIConn
+from openai import APIStatusError as OAIStatus
+from openai import APITimeoutError as OAITimeout
+
 from .base import LLMProvider, LLMResponse, Message, ToolDef
 
 RETRYABLE_STATUS = {429, 500, 502, 503, 504}

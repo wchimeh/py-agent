@@ -1,20 +1,20 @@
-# -*- coding: utf-8 -*-
 # @File:     context.py
 # @Author:   mjh
 # @DateTime: 2026/03/15/13:57
 import json
 
-from .providers.base import AssistantMessage, LLMResponse, Message, ToolResultMessage, UserMessage
+from .prompts import latest_version, load_prompt
+from .providers.base import (
+    AssistantMessage,
+    LLMResponse,
+    Message,
+    ToolResultMessage,
+    UserMessage,
+)
 
-COMPACT_SYSTEM = """你是会话压缩器。把以下对话史压缩成一份紧凑纪要，供后续助手接续工作。
-    必须逐项保留：
-    1. 用户的原始目标与后续追加要求
-    2. 关键决策及理由
-    3. 涉及的文件绝对路径与各文件当前状态（已创建/已修改/已删除）
-    4. 已执行成功的命令与结果要点
-    5. 失败的操作、错误原因与已尝试的修复
-    6. 未完成事项与下一步计划
-    用要点列表输出，不要寒暄，不要复述无关细节。"""
+# 压缩提示词：文本在 prompts/compact_v1.md，文件即版本
+COMPACT_SYSTEM = load_prompt("compact")
+COMPACT_VERSION = latest_version("compact")
 
 
 def estimate_tokens(text: str) -> int:

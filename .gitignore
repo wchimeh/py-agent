@@ -11,6 +11,7 @@ docs/
 __pycache__/
 *.pyc
 *.egg-info/
+dist/
 
 # 环境与工具
 .venv/

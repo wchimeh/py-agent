@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 # @File:     session.py
 # @Author:   mjh
 # @DateTime: 2026/03/15/15:05
@@ -8,7 +7,13 @@ import os
 import secrets
 from datetime import datetime
 
-from .providers.base import AssistantMessage, Message, ToolCall, ToolResultMessage, UserMessage
+from .providers.base import (
+    AssistantMessage,
+    Message,
+    ToolCall,
+    ToolResultMessage,
+    UserMessage,
+)
 
 SESSIONS_DIR = ".agent/sessions"
 

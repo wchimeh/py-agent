@@ -1,10 +1,11 @@
-# -*- coding: utf-8 -*-
 # @File:     config.py
 # @Author:   mjh
 # @DateTime: 2026/03/14/15:33
 import os
 from dataclasses import dataclass
+
 import yaml
+
 # from dotenv import load_dotenv
 
 @dataclass
@@ -28,12 +29,15 @@ class AgentConfig:
     journal: bool = True
     save_session: bool = True
     workspace_root: str = ""
+    prompt_version: int | None = None   # None = 最新版 system prompt
 
 
 def load_config(path: str = "config.yaml") -> AgentConfig:
     # load_dotenv()
-    data = yaml.safe_load(open(path, encoding="utf-8")) \
-        if os.path.exists(path) else {}
+    data = {}
+    if os.path.exists(path):
+        with open(path, encoding="utf-8") as f:
+            data = yaml.safe_load(f)
     provider = data.get("provider", "openai")
     # env_key = "ANTHROPIC_API_KEY" if provider == "anthropic" else "OPENAI_API_KEY"
     mode = data.get("permission_mode", "default")
@@ -61,7 +65,8 @@ def load_config(path: str = "config.yaml") -> AgentConfig:
                        keep_recent=keep_recent,
                        journal=data.get("journal", True),
                        save_session=data.get("save_session", True),
-                       workspace_root=data.get("workspace_root", "")
+                       workspace_root=data.get("workspace_root", ""),
+                       prompt_version=data.get("prompt_version")
                        )
 
 

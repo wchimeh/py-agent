@@ -1,28 +1,38 @@
-# -*- coding: utf-8 -*-
 # @File:     loop.py
 # @Author:   mjh
 # @DateTime: 2026/03/14/15:22
 
 import sys
 import time
-from .spinner import Spinner
-from .providers.base import LLMProvider, Message, StopReason, UserMessage, AssistantMessage, ToolResultMessage, ToolCall
-from .tools import get_tool_defs, execute_tool
+
+from .context import (
+    COMPACT_SYSTEM,
+    COMPACT_VERSION,
+    ContextTracker,
+    render_for_summary,
+    split_for_compact,
+)
 from .permissions import PermissionGate
-from .context import COMPACT_SYSTEM, ContextTracker, render_for_summary, split_for_compact
-from .journal import Journal
+from .prompts import latest_version, load_system_prompt
+from .providers.base import (
+    AssistantMessage,
+    LLMProvider,
+    Message,
+    StopReason,
+    ToolCall,
+    ToolResultMessage,
+    UserMessage,
+)
+from .spinner import Spinner
+from .tools import check_tool_call, execute_tool, get_tool_defs
 
-
-SYSTEM_PROMPT = """你是运行在终端里的编码助手，可以调用工具完成实际任务。
-  规则：
-  - 文件操作一律使用绝对路径；Edit 之前先 Read 确认原文
-  - 当前环境是 Windows，shell 走 cmd.exe，命令优先跨平台
-  - 工具失败时阅读错误信息自行修正，不要原样重试
-  """
+# 系统提示词：文本在 prompts/system_v1.md，文件即版本（常量保留仅为兼容）
+SYSTEM_PROMPT = load_system_prompt()
 
 
 class AgentLoop:
-    def __init__(self, provider: LLMProvider, system: str = SYSTEM_PROMPT,
+    def __init__(self, provider: LLMProvider, system: str | None = None,
+                 prompt_version: int | None = None,
                  max_turns: int = 25, token_budget: int = 500000,
                  permission_gate: PermissionGate | None = None,
                  context_window: int = 128000, compact_threshold: float = 0.8,
@@ -30,6 +40,11 @@ class AgentLoop:
                  journal=None,
                  ):
         self.provider = provider
+        if system is None:
+            system = load_system_prompt(prompt_version)
+            self.prompt_version = prompt_version if prompt_version is not None else latest_version("system")
+        else:
+            self.prompt_version = "custom"
         self.system = system
         self.messages: list[Message] = []
         self.total_prompt_tokens = 0
@@ -55,7 +70,7 @@ class AgentLoop:
         self.messages.append(UserMessage(content=user_input))
         self.tasks_total += 1
         self.last_streamed = False
-        self._log("task_start", input=user_input[:80])
+        self._log("task_start", input=user_input[:80], prompt=self.prompt_version)
         result = self._run_loop()
         self._log("task_end", output=result[:80])
         return result
@@ -144,17 +159,25 @@ class AgentLoop:
             degraded = True
             print(f"  [context] ⚠ 摘要失败（{type(e).__name__}），降级为截断")
             head = f"[会话摘要·截断] 历史过长摘要失败，已丢弃更早的 {len(old)} 条，仅保留最近 {len(kept)} 条。此前任务目标请向用户确认。"
-        self.messages = [UserMessage(content=head)] + kept  # 关键：替换历史
+        self.messages = [UserMessage(content=head), *kept]  # 关键：替换历史
         self.tracker.reset()  # 关键：锚点失效
         self.compact_count += 1
         self._log("compact", msgs_before=len(old) + len(kept),
-                  msgs_after=len(self.messages), degraded=degraded)
+                  msgs_after=len(self.messages), degraded=degraded,
+                  prompt=COMPACT_VERSION)
         print(f"  [context] 已压缩：{len(old) + len(kept)} → {len(self.messages)} 条（估算 {before} → {self.tracker.estimate(self.messages)} tokens）")
 
     def _run_tool(self, tc: ToolCall):
         args = " ".join(f"{k}={str(v)[:40]!r}"
                         for k, v in list(tc.arguments.items())[:2])
         print(f"● {tc.name}({args})")
+
+        err = check_tool_call(tc)   # 无效调用（未知/畸形/校验失败）不弹权限框
+        if err:
+            self.messages.append(ToolResultMessage(tc.id, err, is_error=True))
+            self._log("invalid_tool_call", tool=tc.name)
+            print(f"  ✗ {err.splitlines()[0][:100]}")
+            return
 
         allowed, note = self.gate.authorize(tc)
 

@@ -1,9 +1,10 @@
-# -*- coding: utf-8 -*-
 # @File:     grep.py
 # @Author:   mjh
 # @DateTime: 2026/03/14/16:56
 import re
 from pathlib import Path
+from typing import ClassVar
+
 from .base import SKIP_DIRS, Tool, ToolError, truncate
 from .registry import register
 
@@ -12,7 +13,7 @@ from .registry import register
 class GrepTool(Tool):
     name = "Grep"
     description = "在文件内容中正则搜索，输出 path:line:content。"
-    parameters = {
+    parameters: ClassVar[dict] = {
         "type": "object",
         "properties": {
             "pattern": {"type": "string", "description": "正则表达式"},
@@ -27,7 +28,7 @@ class GrepTool(Tool):
         try:
             rx = re.compile(pattern)
         except re.error as e:
-            raise ToolError(f"正则表达式无效：{e}")
+            raise ToolError(f"正则表达式无效：{e}") from e
         root = Path(path)
         if root.is_file():
             files = [root]

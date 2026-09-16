@@ -1,9 +1,10 @@
-# -*- coding: utf-8 -*-
 # @File:     read.py
 # @Author:   mjh
 # @DateTime: 2026/03/14/16:53
 import os
 from itertools import islice
+from typing import ClassVar
+
 from .base import Tool, ToolError
 from .registry import register
 
@@ -12,7 +13,7 @@ from .registry import register
 class ReadTool(Tool):
     name = "Read"
     description = "读取文本文件，输出带行号。默认前 2000 行；单行超 2000 字符会截断。"
-    parameters = {
+    parameters: ClassVar[dict] = {
         "type": "object",
         "properties": {
             "file_path": {"type": "string", "description": "文件绝对路径"},

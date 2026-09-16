@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 # @File:     test_retry.py
 # @Author:   mjh
 # @DateTime: 2026/03/15
@@ -100,7 +99,7 @@ def _sdk_status_error(cls, code: int):
     return cls("http error", response=httpx.Response(code, request=req), body=None)
 
 def test_is_retryable_real_openai_errors():
-    from openai import APIStatusError, APIConnectionError
+    from openai import APIConnectionError, APIStatusError
     assert is_retryable(_sdk_status_error(APIStatusError, 429)) is True
     assert is_retryable(_sdk_status_error(APIStatusError, 503)) is True
     assert is_retryable(_sdk_status_error(APIStatusError, 401)) is False

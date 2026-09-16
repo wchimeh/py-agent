@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 # @File:     spinner.py
 # @Author:   mjh
 # @DateTime: 2026/03/14/16:08

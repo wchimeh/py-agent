@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - run: pip install ruff==0.16.7
+      - run: ruff check .
+
+  test:
+    strategy:
+      fail-fast: false   # 首跑看全貌，不因单组合失败取消其余
+      matrix:
+        include:
+          - { os: ubuntu-latest,  python: "3.10" }
+          - { os: ubuntu-latest,  python: "3.11" }
+          - { os: ubuntu-latest,  python: "3.12" }
+          - { os: ubuntu-latest,  python: "3.13" }
+          - { os: windows-latest, python: "3.13" }
+          - { os: macos-latest,   python: "3.13" }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python }}
+      - run: pip install -e ".[dev]"
+      - run: pytest -q
+
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - run: pip install build
+      - run: python -m build
+      - name: wheel 安装态验证（prompts package-data 可用）
+        run: |
+          pip install dist/*.whl
+          cd /tmp   # 离开仓库目录，防本地 agent/ 遮蔽 site-packages
+          python -c "from agent.prompts import load_system_prompt; s = load_system_prompt(); assert len(s) > 0; print('wheel install OK, system prompt', len(s), 'chars')"

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 # @File:     test_session.py
 # @Author:   mjh
 # @DateTime: 2026/03/15
@@ -9,10 +8,20 @@ import re
 
 import pytest
 
-from agent.providers.base import AssistantMessage, ToolCall, ToolResultMessage, UserMessage
-from agent.session import (SessionError, list_sessions, load_message,
-                           load_session, new_session_id, save_session)
-
+from agent.providers.base import (
+    AssistantMessage,
+    ToolCall,
+    ToolResultMessage,
+    UserMessage,
+)
+from agent.session import (
+    SessionError,
+    list_sessions,
+    load_message,
+    load_session,
+    new_session_id,
+    save_session,
+)
 
 MSGS = [
     UserMessage("写文件"),
@@ -59,15 +68,18 @@ def test_save_creates_dir_and_overwrites(tmp_path):
 def test_first_input_metadata(tmp_path):
     d = str(tmp_path)
     save_session("s1", MSGS, dir_=d)
-    data = json.load(open(os.path.join(d, "s1.json"), encoding="utf-8"))
+    with open(os.path.join(d, "s1.json"), encoding="utf-8") as f:
+        data = json.load(f)
     assert data["id"] == "s1"
     assert data["first_input"] == "写文件"
     assert len(data["messages"]) == 4
     # 空消息与会话摘要开头：取首条 UserMessage、截断 60
     save_session("s2", [], dir_=d)
-    assert json.load(open(os.path.join(d, "s2.json"), encoding="utf-8"))["first_input"] == ""
+    with open(os.path.join(d, "s2.json"), encoding="utf-8") as f:
+        assert json.load(f)["first_input"] == ""
     save_session("s3", [UserMessage("长" * 100)], dir_=d)
-    assert len(json.load(open(os.path.join(d, "s3.json"), encoding="utf-8"))["first_input"]) == 60
+    with open(os.path.join(d, "s3.json"), encoding="utf-8") as f:
+        assert len(json.load(f)["first_input"]) == 60
 
 
 # ---------- 损坏与缺失 ----------

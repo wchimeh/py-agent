@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 # @File:     journal.py
 # @Author:   mjh
 # @DateTime: 2026/03/15/15:08

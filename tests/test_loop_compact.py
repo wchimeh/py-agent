@@ -1,12 +1,12 @@
-# -*- coding: utf-8 -*-
 # @File:     test_loop_compact.py
 # @Author:   mjh
 # @DateTime: 2026/03/15
 """P5 集成测试：超阈值自动压缩、历史变短、降级截断、未超零副作用。"""
+from test_loop import BYPASS_GATE
+
+from agent.loop import AgentLoop
 from agent.providers.base import LLMResponse, StopReason, ToolCall
 from agent.providers.retry import AgentError
-from agent.loop import AgentLoop
-from test_loop import BYPASS_GATE
 
 
 class ScriptProvider:
@@ -63,8 +63,10 @@ def test_compact_triggers_and_shrinks_history(ws, tmp_path):
     assert loop.messages[0].content.startswith("[会话摘要]")
     assert loop.messages[0].content == "[会话摘要]\n" + _SUMMARY.text
     # 工具真实执行过，压缩不回滚副作用
-    assert open(f1, encoding="utf-8").read() == "x"
-    assert open(f2, encoding="utf-8").read() == "x"
+    with open(f1, encoding="utf-8") as f:
+        assert f.read() == "x"
+    with open(f2, encoding="utf-8") as f:
+        assert f.read() == "x"
 
 def test_summary_usage_counted_in_stats(ws, tmp_path):
     provider = ScriptProvider([

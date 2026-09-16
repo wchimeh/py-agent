@@ -1,21 +1,21 @@
-# -*- coding: utf-8 -*-
 # @File:     test_tools.py
 # @Author:   mjh
 # @DateTime: 2026/03/14
 """工具层单测：只测纯本地逻辑，不依赖网络与真实 API。"""
 import os
+from typing import ClassVar
+
 import pytest
 
+from agent.providers.base import ToolCall
 from agent.tools.base import truncate
-from agent.tools.read import ReadTool
+from agent.tools.bash import BashTool
+from agent.tools.edit import EditTool
 from agent.tools.glob import GlobTool
 from agent.tools.grep import GrepTool
-from agent.tools.write import WriteTool
-from agent.tools.edit import EditTool
-from agent.tools.bash import BashTool
+from agent.tools.read import ReadTool
 from agent.tools.registry import _TOOLS, execute_tool
-from agent.providers.base import ToolCall
-
+from agent.tools.write import WriteTool
 
 # ---------- base.truncate ----------
 
@@ -246,5 +246,96 @@ def test_execute_tool_unknown_tool():
 
 def test_execute_tool_never_raises(tmp_path):
     # 工具内部抛任意异常都转为 (错误信息, True)，不击穿循环
-    content, is_error = _run("Read", file_path=str(tmp_path))  # 目录不是文件
+    _, is_error = _run("Read", file_path=str(tmp_path))  # 目录不是文件
     assert is_error is True
+
+
+# ---------- registry 参数校验（P9：LLM 输出边界） ----------
+
+def test_validate_missing_required_param():
+    content, is_error = _run("Bash")  # 缺 command
+    assert is_error is True
+    assert "缺少必填参数" in content and "command" in content
+
+def test_validate_unknown_param():
+    content, is_error = _run("Bash", command="echo ok", bogus=1)
+    assert is_error is True
+    assert "未知参数" in content and "bogus" in content
+
+def test_validate_uncoercible_type():
+    content, is_error = _run("Bash", command="echo ok", timeout="abc")
+    assert is_error is True
+    assert "timeout" in content
+
+def test_validate_lax_coercion():
+    # lax 语义固化："5"→5 自动转换不报错（用户确认的宽松行为）
+    content, is_error = _run("Bash", command="echo ok", timeout="5")
+    assert is_error is False and "ok" in content
+
+def test_validate_enum_violation():
+    from agent.tools import registry
+    from agent.tools.base import Tool
+
+    @registry.register
+    class EnumFake(Tool):
+        name = "EnumFake"
+        description = "测试用"
+        parameters: ClassVar[dict] = {"type": "object",
+                      "properties": {"mode": {"type": "string", "enum": ["a", "b"]}},
+                      "required": ["mode"]}
+
+        def execute(self, mode):
+            return f"ok:{mode}"
+
+    try:
+        content, is_error = _run("EnumFake", mode="c")
+        assert is_error is True and "mode" in content
+        content, is_error = _run("EnumFake", mode="a")
+        assert is_error is False and content == "ok:a"
+    finally:
+        registry._TOOLS.pop("EnumFake", None)
+        getattr(registry, "_MODELS", {}).pop("EnumFake", None)
+
+def test_validate_omitted_optional_uses_execute_default():
+    # exclude_unset 语义：省略 timeout 时不传 None，execute 默认值 120 生效
+    content, is_error = _run("Bash", command="echo ok")
+    assert is_error is False and "ok" in content
+
+def test_execute_tool_malformed_json_sentinel():
+    # provider 解析失败塞入的哨兵 → 明确的解析错误回灌，不进 schema 校验也不执行
+    from agent.providers.base import MALFORMED_ARGS_KEY
+    content, is_error = _run("Bash", **{MALFORMED_ARGS_KEY: '{"command": '})
+    assert is_error is True
+    assert "不是合法 JSON" in content and "command" in content
+
+def test_sentinel_requires_sole_key():
+    # 哨兵与其他参数混合时不是解析错误，走 schema 校验（未知参数）
+    from agent.providers.base import MALFORMED_ARGS_KEY
+    content, is_error = _run("Bash", **{MALFORMED_ARGS_KEY: "not json",
+                                       "command": "echo ok"})
+    assert is_error is True
+    assert "未知参数" in content
+
+def test_validation_error_schema_truncated():
+    from agent.tools import registry
+    from agent.tools.base import Tool
+
+    @registry.register
+    class BigSchema(Tool):
+        name = "BigSchema"
+        description = "测试用"
+        parameters: ClassVar[dict] = {"type": "object",
+                      "properties": {"x": {"type": "string",
+                                           "description": "长" * 2000}},
+                      "required": ["x"]}
+
+        def execute(self, x):
+            return "ok"
+
+    try:
+        content, is_error = _run("BigSchema")   # 缺必填，错误回灌附 schema
+        assert is_error is True
+        assert len(content) <= 1200             # schema 超长必须截断
+    finally:
+        registry._TOOLS.pop("BigSchema", None)
+        registry._MODELS.pop("BigSchema", None)

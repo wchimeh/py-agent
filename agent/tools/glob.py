@@ -1,9 +1,10 @@
-# -*- coding: utf-8 -*-
 # @File:     glob.py
 # @Author:   mjh
 # @DateTime: 2026/03/15
 import fnmatch
 import os
+from typing import ClassVar
+
 from .base import SKIP_DIRS, Tool
 from .registry import register
 
@@ -27,7 +28,7 @@ class GlobTool(Tool):
     name = "Glob"
     description = ("按模式匹配文件路径（如 **/*.py），按修改时间倒序，上限 200 条；"
                    "自动跳过 .git/.venv/__pycache__/node_modules 等目录。")
-    parameters = {
+    parameters: ClassVar[dict] = {
         "type": "object",
         "properties": {
             "pattern": {"type": "string", "description": "glob 模式，** 匹配任意层目录"},

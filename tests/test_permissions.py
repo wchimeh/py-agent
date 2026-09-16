@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 # @File:     test_permissions.py
 # @Author:   mjh
 # @DateTime: 2026/03/15
@@ -84,7 +83,7 @@ def test_danger_beats_session_allow():
     gate, asked = make("default", answers=["a", "n"])
     assert gate.authorize(tc("Bash", command="cd tmp"))[0] is True
     assert len(asked) == 1
-    ok, note = gate.authorize(tc("Bash", command="cd tmp && del /s /q x"))
+    ok, _ = gate.authorize(tc("Bash", command="cd tmp && del /s /q x"))
     assert ok is False and len(asked) == 2
 
 

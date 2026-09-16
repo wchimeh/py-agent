@@ -1,5 +1,7 @@
 # 终端编码 Agent
 
+[![CI](https://github.com/wchimeh/py-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/wchimeh/py-agent/actions/workflows/ci.yml)
+
 类 Claude Code 的命令行编码助手。核心思想：**控制流交给模型**——用户输入目标，模型通过工具调用循环（读文件 → 改代码 → 跑命令 → 看结果 → 继续）自主完成任务，宿主负责执行、守门与兜底。
 
 ## 功能特性
@@ -58,6 +60,7 @@ agent        # 启动；pytest 跑测试
 | `journal` | `true` | JSONL 日志到 `.agent/logs/` |
 | `save_session` | `true` | 任务结束自动保存会话到 `.agent/sessions/` |
 | `workspace_root` | `""` | 工作区根，留空 = 启动目录；Write/Edit 硬边界 |
+| `prompt_version` | 最新版 | pin 系统提示词版本（`agent/prompts/system_v{N}.md` 文件即版本） |
 
 ## 使用说明
 
@@ -85,6 +88,8 @@ REPL 内命令：
 
 ```
 main.py            入口 + REPL
+.github/
+  workflows/ci.yml CI 门禁（lint + 测试矩阵 + 打包安装验证）
 agent/
   loop.py          Agentic 主循环（流式接入、压缩触发、预算防线）
   providers/       双协议接入（base 抽象 + anthropic/openai + 重试装饰）
@@ -94,8 +99,7 @@ agent/
   session.py       多会话持久化（原子写、损坏隔离）
   journal.py       JSONL 事件日志
   spinner.py       等待动画（首个流式增量即停）
-tests/             143 项单测，全程零网络
-docs/              开发文档（PLAN.md 总纲，P1~P8 各阶段）
+tests/             166 项单测，全程零网络
 ```
 
 ## 开发
@@ -103,9 +107,18 @@ docs/              开发文档（PLAN.md 总纲，P1~P8 各阶段）
 ```bash
 pip install -e ".[dev]"
 pytest                # 全部测试，零网络，约 10s
+ruff check .          # lint（版本锁定 0.16.7，与 CI 一致）
 ```
 
-各阶段设计决策与风险记录见 `docs/PLAN.md` 与 `docs/DEV_P*.md`。
+真实模型冒烟（产生 API 费用，显式运行才会花钱）：
+
+```bash
+python scripts/smoke.py            # 5 用例全量；--list 只看清单；--only S1,S3 选择执行
+```
+
+CI（GitHub Actions）：push / PR 自动跑 ruff lint + 测试矩阵（ubuntu × Python 3.10~3.13、Windows/macOS × 3.13）+ wheel 构建与安装态验证。
+
+各阶段设计决策与风险记录为本地开发文档（`docs/PLAN.md`、`docs/DEV_P*.md`，**不入库**，克隆者不可见）。
 
 ## 安全注意事项
 
@@ -117,6 +130,5 @@ pytest                # 全部测试，零网络，约 10s
 ## 已知局限（路线图）
 
 - 无命令沙箱：Bash 以当前用户权限执行，真沙箱（容器 / Job Object）在远期规划
-- 无 CI 门禁：测试全靠本地自觉，待决定代码托管位置后补
 - 日志按日分文件、不自动轮转；无成本核算（token × 单价）
 - 权限粒度为工具级（Bash 按首命令记忆），暂无前缀规则细化

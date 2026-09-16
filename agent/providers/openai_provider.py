@@ -1,13 +1,31 @@
-# -*- coding: utf-8 -*-
 # @File:     openai_provider.py
 # @Author:   mjh
 # @DateTime: 2026/03/14/15:02
 
 import json
+
 from openai import BadRequestError, OpenAI
-from .base import LLMProvider, LLMResponse, StopReason, UserMessage, ToolResultMessage, AssistantMessage, ToolCall
+
+from .base import (
+    MALFORMED_ARGS_KEY,
+    AssistantMessage,
+    LLMProvider,
+    LLMResponse,
+    StopReason,
+    ToolCall,
+    ToolResultMessage,
+    UserMessage,
+)
 
 _FINISH_MAP = {'stop': StopReason.END_TURN, 'tool_calls': StopReason.TOOL_USE, 'length': StopReason.MAX_TOKENS}
+
+
+def _parse_args(raw: str | None) -> dict:
+    """模型输出的 arguments JSON 解析；非法时塞哨兵片段，由 registry 转为错误回灌。"""
+    try:
+        return json.loads(raw or "{}")
+    except json.JSONDecodeError:
+        return {MALFORMED_ARGS_KEY: (raw or "")[:500]}
 
 
 class OpenAIProvider(LLMProvider):
@@ -52,13 +70,14 @@ class OpenAIProvider(LLMProvider):
         resp = self.client.chat.completions.create(**self._kwargs(messages, tools, system))
         choice = resp.choices[0]
         tool_calls = [ToolCall(id=tc.id, name=tc.function.name,
-                               arguments=json.loads(tc.function.arguments or "{}"))
+                               arguments=_parse_args(tc.function.arguments))
                       for tc in (choice.message.tool_calls or [])]
+        usage = getattr(resp, "usage", None)
         return LLMResponse(
             text=choice.message.content, tool_calls=tool_calls,
             stop_reason=_FINISH_MAP.get(choice.finish_reason, StopReason.END_TURN),
-            prompt_tokens=resp.usage.prompt_tokens,
-            completion_tokens=resp.usage.completion_tokens)
+            prompt_tokens=getattr(usage, "prompt_tokens", 0) or 0,
+            completion_tokens=getattr(usage, "completion_tokens", 0) or 0)
 
     def chat_stream(self, messages, tools=None, system="", on_text=None):
         if on_text is None:
@@ -97,7 +116,7 @@ class OpenAIProvider(LLMProvider):
             if c.finish_reason:
                 finish = c.finish_reason
         tool_calls = [ToolCall(id=s["id"] or f"t{i}", name=s["name"] or "",
-                               arguments=json.loads(s["args"] or "{}"))
+                               arguments=_parse_args(s["args"]))
                       for i, s in sorted(acc.items())]
         return LLMResponse(
             text="".join(texts) or None, tool_calls=tool_calls,

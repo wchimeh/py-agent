@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 # @File:     test_providers.py
 # @Author:   mjh
 # @DateTime: 2026/03/15
@@ -6,10 +5,18 @@
 import json
 from types import SimpleNamespace
 
-from agent.providers.base import (AssistantMessage, LLMProvider, LLMResponse,
-                                  StopReason, ToolCall, ToolDef,
-                                  ToolResultMessage, UserMessage)
 from agent.providers.anthropic_provider import AnthropicProvider
+from agent.providers.base import (
+    MALFORMED_ARGS_KEY,
+    AssistantMessage,
+    LLMProvider,
+    LLMResponse,
+    StopReason,
+    ToolCall,
+    ToolDef,
+    ToolResultMessage,
+    UserMessage,
+)
 from agent.providers.openai_provider import OpenAIProvider
 
 
@@ -86,6 +93,17 @@ def test_openai_chat_parses_response():
     assert fake.kwargs["model"] == "m"
     assert fake.kwargs["messages"][0]["role"] == "system"
     assert "tools" not in fake.kwargs
+
+def test_openai_chat_missing_usage_counts_zero():
+    p = make_openai()
+    fake = FakeOpenAIClient(SimpleNamespace(
+        choices=[SimpleNamespace(finish_reason="stop",
+                                 message=SimpleNamespace(content="hi", tool_calls=None))],
+        usage=None))  # 服务端不返回 usage：不得抛 AttributeError（问题 7）
+    p.client = fake
+    resp = p.chat([UserMessage("x")])
+    assert resp.prompt_tokens == 0 and resp.completion_tokens == 0
+
 
 def test_openai_chat_tools_schema_and_stop_map():
     p = make_openai()
@@ -311,9 +329,10 @@ def test_openai_chat_stream_text_accumulates():
 
 def test_openai_chat_stream_tool_args_concat_across_chunks():
     p = make_openai()
-    tc = lambda id=None, name=None, args=None: SimpleNamespace(
-        index=0, id=id,
-        function=SimpleNamespace(name=name, arguments=args))
+    def tc(id=None, name=None, args=None):
+        return SimpleNamespace(
+            index=0, id=id,
+            function=SimpleNamespace(name=name, arguments=args))
     p.client = FakeOpenAIStreamClient([
         _oai_chunk(tool_calls=[tc(id="t1", name="Write", args='{"file_p')]),
         _oai_chunk(tool_calls=[tc(args='ath": "a.txt", "content": "x"}')]),
@@ -334,6 +353,42 @@ def test_openai_chat_stream_missing_usage_counts_zero():
     ])
     resp = p.chat_stream([UserMessage("x")], on_text=lambda t: None)
     assert resp.prompt_tokens == 0 and resp.completion_tokens == 0
+
+
+# ---------- OpenAI：非法 JSON 兜底（P9：不击穿循环，哨兵回灌） ----------
+
+def test_openai_chat_malformed_json_arguments_not_raise():
+    p = make_openai()
+    inner_call = SimpleNamespace(
+        id="t9", function=SimpleNamespace(name="Bash",
+                                          arguments='{"command": '))  # 截断的非法 JSON
+    fake = FakeOpenAIClient(SimpleNamespace(
+        choices=[SimpleNamespace(finish_reason="tool_calls",
+                                 message=SimpleNamespace(content=None,
+                                                         tool_calls=[inner_call]))],
+        usage=SimpleNamespace(prompt_tokens=1, completion_tokens=1)))
+    p.client = fake
+    resp = p.chat([UserMessage("x")])
+
+    assert resp.tool_calls[0].name == "Bash"
+    assert resp.tool_calls[0].arguments[MALFORMED_ARGS_KEY] == '{"command": '
+
+def test_openai_chat_stream_malformed_json_arguments_not_raise():
+    p = make_openai()
+    def tc(id=None, name=None, args=None):
+        return SimpleNamespace(
+            index=0, id=id,
+            function=SimpleNamespace(name=name, arguments=args))
+    p.client = FakeOpenAIStreamClient([
+        _oai_chunk(tool_calls=[tc(id="t1", name="Write", args='{"file_p')]),
+        _oai_chunk(tool_calls=[tc(args='ath": ')]),  # 拼完仍非法
+        _oai_chunk(finish="tool_calls",
+                   usage=SimpleNamespace(prompt_tokens=1, completion_tokens=1)),
+    ])
+    resp = p.chat_stream([UserMessage("x")], on_text=lambda t: None)
+
+    assert resp.tool_calls[0].name == "Write"
+    assert MALFORMED_ARGS_KEY in resp.tool_calls[0].arguments
 
 def test_openai_chat_stream_badrequest_falls_back_to_chat():
     import httpx

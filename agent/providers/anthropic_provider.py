@@ -1,9 +1,17 @@
-# -*- coding: utf-8 -*-
 # @File:     anthropic_provider.py
 # @Author:   mjh
 # @DateTime: 2026/03/14/15:17
 from anthropic import Anthropic
-from .base import LLMProvider, LLMResponse, StopReason, ToolCall, UserMessage, AssistantMessage, ToolResultMessage
+
+from .base import (
+    AssistantMessage,
+    LLMProvider,
+    LLMResponse,
+    StopReason,
+    ToolCall,
+    ToolResultMessage,
+    UserMessage,
+)
 
 _STOP_MAP = {"end_turn": StopReason.END_TURN, "tool_use": StopReason.TOOL_USE, "max_tokens": StopReason.MAX_TOKENS}
 

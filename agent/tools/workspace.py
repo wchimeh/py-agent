@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 # @File:     workspace.py
 # @Author:   mjh
 # @DateTime: 2026/03/15

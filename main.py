@@ -1,26 +1,25 @@
-# -*- coding: utf-8 -*-
 # @File:     main.py
 # @Author:   mjh
 # @DateTime: 2026/03/14/11:35
 import os
 import sys
+
 from prompt_toolkit import prompt
+
 from agent.config import load_config
-from agent.providers import create_provider
-from agent.loop import AgentLoop
-from agent.providers.retry import AgentError
-from agent.permissions import PermissionGate
 from agent.journal import Journal
-from agent.session import SessionError, list_sessions, load_session, new_session_id, save_session
-from agent.tools.workspace import set_root, get_root
-
-
-SYSTEM = """你是运行在终端里的编码助手，可以调用工具完成实际任务。
-  规则：
-  - 文件操作一律使用绝对路径；Edit 之前先 Read 确认原文
-  - 当前环境是 Windows，shell 走 cmd.exe，命令优先跨平台
-  - 工具失败时阅读错误信息自行修正，不要原样重试
-  """
+from agent.loop import AgentLoop
+from agent.permissions import PermissionGate
+from agent.providers import create_provider
+from agent.providers.retry import AgentError
+from agent.session import (
+    SessionError,
+    list_sessions,
+    load_session,
+    new_session_id,
+    save_session,
+)
+from agent.tools.workspace import get_root, set_root
 
 OLD_SESSION = ".agent/session.json"   # P6 初版单文件，已停用
 
@@ -69,7 +68,8 @@ def start_loop():
     gate = PermissionGate(cfg.permission_mode)
     sid = new_session_id()
     journal = Journal.daily() if cfg.journal else None
-    loop = AgentLoop(create_provider(cfg), system=SYSTEM, max_turns=cfg.max_turns, token_budget=cfg.token_budget,
+    loop = AgentLoop(create_provider(cfg), prompt_version=cfg.prompt_version,
+                     max_turns=cfg.max_turns, token_budget=cfg.token_budget,
                      permission_gate=gate, context_window=cfg.context_window, compact_threshold=cfg.compact_threshold,
                      keep_recent=cfg.keep_recent, journal=journal
                      )

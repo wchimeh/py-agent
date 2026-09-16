@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 # @File:     test_journal.py
 # @Author:   mjh
 # @DateTime: 2026/03/15
@@ -7,11 +6,12 @@ import json
 import os
 from datetime import datetime
 
-from agent.providers.base import LLMResponse, StopReason, ToolCall
-from agent.loop import AgentLoop
+from test_loop import BYPASS_GATE, FakeProvider
+
 from agent.journal import Journal
+from agent.loop import AgentLoop
 from agent.permissions import PermissionGate
-from test_loop import FakeProvider, BYPASS_GATE
+from agent.providers.base import LLMResponse, StopReason, ToolCall
 
 
 def read_events(path):

@@ -1,12 +1,15 @@
-# -*- coding: utf-8 -*-
 # @File:     base.py
 # @Author:   mjh
 # @DateTime: 2026/03/14/13:39
 
+from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
-from dataclasses import dataclass, field
-from abc import ABC, abstractmethod
+
+# provider 与 tools.registry 共用的畸形参数哨兵：arguments 的 JSON 解析失败时，
+# provider 把原始片段塞进此键，registry 命中后按解析错误回灌模型
+MALFORMED_ARGS_KEY = "__malformed_json__"
 
 
 class StopReason(str, Enum):
