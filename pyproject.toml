@@ -16,7 +16,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=9.1.1", "ruff==0.16.7"]
+dev = ["pytest>=9.1.1", "ruff==0.16.7", "httpx>=0.28.1"]
 
 [project.scripts]
 agent = "main:start_loop"

@@ -15,5 +15,6 @@ dist/
 
 # 环境与工具
 .venv/
+.venv-ci/
 .idea/
 .pytest_cache/
