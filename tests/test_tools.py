@@ -3,6 +3,7 @@
 # @DateTime: 2026/03/14
 """工具层单测：只测纯本地逻辑，不依赖网络与真实 API。"""
 import os
+import sys
 from typing import ClassVar
 
 import pytest
@@ -223,9 +224,11 @@ def test_bash_nonzero_exit_is_error_with_output():
         BashTool().execute(command="exit 3")
 
 def test_bash_timeout():
+    # sys.executable 而非裸 `python`：Ubuntu 24.04 等裸系统只有 python3（CI 修复 2026-09-16）
     with pytest.raises(Exception, match="超时"):
-        BashTool().execute(command='python -c "import time; time.sleep(5)"',
-                           timeout=1)
+        BashTool().execute(
+            command=f'"{sys.executable}" -c "import time; time.sleep(5)"',
+            timeout=1)
 
 
 # ---------- registry / execute_tool ----------
