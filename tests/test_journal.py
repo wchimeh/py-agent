@@ -35,12 +35,21 @@ def test_journal_appends_jsonl(tmp_path):
     p = str(tmp_path / "j.jsonl")
     j = Journal(p)
     j.log("task_start", input="hi")
-    j.log("llm_call", prompt=10, completion=5, secs=0.1, stop="end_turn")
+    j.log("llm_call", prompt_tokens=10, completion=5, secs=0.1, stop="end_turn")
     events = read_events(p)
     assert len(events) == 2
     assert events[0]["event"] == "task_start" and events[0]["input"] == "hi"
     assert "ts" in events[0]                              # 每行带时间戳
-    assert events[1]["stop"] == "end_turn" and events[1]["prompt"] == 10
+    assert events[1]["stop"] == "end_turn" and events[1]["prompt_tokens"] == 10
+
+
+def test_journal_llm_call_no_prompt_field(tmp_path):
+    # P12 发现：llm_call.prompt（token 数）与 task_start/compact.prompt（版本）撞名——
+    # llm_call 侧改名 prompt_tokens 后，prompt 字段只保留版本语义
+    p = str(tmp_path / "j.jsonl")
+    Journal(p).log("llm_call", prompt_tokens=10, completion=5, secs=0.1, stop="end_turn")
+    ev = read_events(p)[0]
+    assert "prompt" not in ev and ev["prompt_tokens"] == 10
 
 
 def test_journal_disabled_writes_nothing(tmp_path):

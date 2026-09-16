@@ -66,6 +66,25 @@ def test_journal_task_start_records_prompt_version():
     loop.run("hi")
     start = next(f for e, f in j.events if e == "task_start")
     assert start["prompt"] == 1  # 默认最新版 system_v1
+    # P14：llm_call 的 token 数字段改名 prompt_tokens，prompt 只保留版本语义
+    llm = next(f for e, f in j.events if e == "llm_call")
+    assert llm["prompt_tokens"] == 10 and "prompt" not in llm
+
+
+def test_tool_call_line_arg_display(ws, tmp_path, capsys):
+    # P14：短值（≤60 字符）完整显示；超长值截断并带 (len=N)；参数显示上限 3
+    long_path = str(tmp_path / ("x" * 80 + ".txt"))
+    provider = FakeProvider([
+        _tool_resp([ToolCall(id="t1", name="Edit", arguments={
+            "file_path": long_path, "old_string": "OLD",
+            "new_string": "NEW", "replace_all": False})]),
+        _end_resp()])
+    AgentLoop(provider, max_turns=5, permission_gate=BYPASS_GATE).run("编辑")
+    line = next(ln for ln in capsys.readouterr().out.splitlines() if ln.startswith("● Edit("))
+    assert "'OLD'" in line                       # 短值完整显示
+    assert long_path not in line                 # 超长路径被截断
+    assert "(len=" in line                       # 截断值带长度标注
+    assert "replace_all" not in line             # 参数显示上限 3
 
 
 class RecordingGate:

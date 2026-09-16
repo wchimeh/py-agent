@@ -42,7 +42,20 @@ def get_tool_defs() -> list[ToolDef]:
     return [ToolDef(name=t.name, description=t.description, parameters=t.parameters) for t in _TOOLS.values()]
 
 
-_ERR_ZH = {"missing": "缺少必填参数", "extra_forbidden": "未知参数"}
+_ERR_ZH = {
+    "missing": "缺少必填参数",
+    "extra_forbidden": "未知参数",
+    "int_parsing": "应为整数，无法从该值解析",
+    "int_type": "应为整数",
+    "float_parsing": "应为数字，无法从该值解析",
+    "float_type": "应为数字",
+    "bool_parsing": "应为布尔值，无法从该值解析",
+    "bool_type": "应为布尔值",
+    "string_type": "应为字符串",
+    "list_type": "应为数组",
+    "dict_type": "应为对象",
+    "literal_error": "取值不在允许的枚举范围内",
+}
 
 _SCHEMA_LIMIT = 800
 

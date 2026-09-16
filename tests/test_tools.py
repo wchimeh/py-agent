@@ -267,6 +267,11 @@ def test_validate_uncoercible_type():
     assert is_error is True
     assert "timeout" in content
 
+def test_validate_type_error_in_chinese():
+    # P12 冒烟发现：int_parsing 等类型错误回灌英文原文，补全 _ERR_ZH 中文映射
+    content, _ = _run("Bash", command="echo ok", timeout="soon")
+    assert "应为整数" in content
+
 def test_validate_lax_coercion():
     # lax 语义固化："5"→5 自动转换不报错（用户确认的宽松行为）
     content, is_error = _run("Bash", command="echo ok", timeout="5")

@@ -30,6 +30,14 @@ from .tools import check_tool_call, execute_tool, get_tool_defs
 SYSTEM_PROMPT = load_system_prompt()
 
 
+def _arg_preview(v, limit=60) -> str:
+    """工具行参数预览：≤60 字符全显（覆盖常见 Windows 路径）；超长截断并标注原始长度。"""
+    s = str(v)
+    if len(s) <= limit:
+        return repr(s)
+    return f"{s[:limit]!r}(len={len(s)})"
+
+
 class AgentLoop:
     def __init__(self, provider: LLMProvider, system: str | None = None,
                  prompt_version: int | None = None,
@@ -88,7 +96,7 @@ class AgentLoop:
             self.tracker.update_anchor(resp, self.messages)     # 上下文管理
             secs = time.monotonic() - t0
             self._account(resp, secs)
-            self._log("llm_call", prompt=resp.prompt_tokens,
+            self._log("llm_call", prompt_tokens=resp.prompt_tokens,
                       completion=resp.completion_tokens,
                       secs=round(secs, 2), stop=resp.stop_reason.value,
                       streamed=self._streamed_turn)
@@ -168,8 +176,8 @@ class AgentLoop:
         print(f"  [context] 已压缩：{len(old) + len(kept)} → {len(self.messages)} 条（估算 {before} → {self.tracker.estimate(self.messages)} tokens）")
 
     def _run_tool(self, tc: ToolCall):
-        args = " ".join(f"{k}={str(v)[:40]!r}"
-                        for k, v in list(tc.arguments.items())[:2])
+        args = " ".join(f"{k}={_arg_preview(v)}"
+                        for k, v in list(tc.arguments.items())[:3])
         print(f"● {tc.name}({args})")
 
         err = check_tool_call(tc)   # 无效调用（未知/畸形/校验失败）不弹权限框
