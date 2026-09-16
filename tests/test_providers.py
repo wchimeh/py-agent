@@ -5,6 +5,8 @@
 import json
 from types import SimpleNamespace
 
+import pytest
+
 from agent.providers.anthropic_provider import AnthropicProvider
 from agent.providers.base import (
     MALFORMED_ARGS_KEY,
@@ -17,7 +19,7 @@ from agent.providers.base import (
     ToolResultMessage,
     UserMessage,
 )
-from agent.providers.openai_provider import OpenAIProvider
+from agent.providers.openai_provider import OpenAIProvider, _ThinkFilter
 
 
 def make_openai():
@@ -423,3 +425,87 @@ def test_openai_chat_stream_badrequest_falls_back_to_chat():
     assert resp.text == "降级回答" and resp.prompt_tokens == 5
     assert seen == []                          # 非流式降级不产生增量
     assert len(p.client.calls) == 2            # 先流式 400，再非流式成功
+
+
+# ---------- P15：think 标签剥离（openai 协议推理模型思考段） ----------
+
+
+def test_think_filter_single_chunk():
+    f = _ThinkFilter()
+    assert f.feed("<think>思考</think>你好") == "你好"
+
+
+def test_think_filter_tag_split_across_chunks():
+    f = _ThinkFilter()
+    assert f.feed("<th") == ""
+    assert f.feed("ink>秘密") == ""
+    assert f.feed("</th") == ""
+    assert f.feed("ink>完成") == "完成"
+
+
+def test_think_filter_multiple_blocks():
+    f = _ThinkFilter()
+    assert f.feed("<think>A</think>一<think>B</think>二") == "一二"
+
+
+def test_think_filter_holdback_released_on_flush():
+    f = _ThinkFilter()
+    assert f.feed("正文<") == "正文"     # "<" 疑似标签前缀，留缓冲
+    assert f.flush() == "<"             # 流结束确认不是标签，放行
+
+
+def test_think_filter_unclosed_think_dropped_at_flush():
+    f = _ThinkFilter()
+    assert f.feed("<think>没说完") == ""
+    assert f.flush() == ""              # 流中断在思考内，丢弃
+
+
+def test_think_filter_plain_text_passthrough():
+    f = _ThinkFilter()
+    assert f.feed("a<b") == "a<b"
+
+
+def test_openai_chat_strips_think_block():
+    p = make_openai()
+    p.client = FakeOpenAIClient(SimpleNamespace(
+        choices=[SimpleNamespace(finish_reason="stop",
+                                 message=SimpleNamespace(
+                                     content="<think>推理过程</think>\n\n你好",
+                                     tool_calls=None))],
+        usage=SimpleNamespace(prompt_tokens=9, completion_tokens=9)))
+    assert p.chat([UserMessage("x")]).text == "你好"
+
+
+def test_openai_chat_think_only_yields_none():
+    p = make_openai()
+    p.client = FakeOpenAIClient(SimpleNamespace(
+        choices=[SimpleNamespace(finish_reason="stop",
+                                 message=SimpleNamespace(
+                                     content="<think>只有思考没有正文</think>",
+                                     tool_calls=None))],
+        usage=SimpleNamespace(prompt_tokens=9, completion_tokens=9)))
+    assert p.chat([UserMessage("x")]).text is None
+
+
+def test_openai_chat_stream_think_split_not_leaked():
+    p = make_openai()
+    p.client = FakeOpenAIStreamClient([
+        _oai_chunk(content="<th"),
+        _oai_chunk(content="ink>隐"),
+        _oai_chunk(content="秘</th"),
+        _oai_chunk(content="ink>你好"),
+        _oai_chunk(finish="stop"),
+    ])
+    seen = []
+    resp = p.chat_stream([UserMessage("x")], on_text=seen.append)
+    assert resp.text == "你好"
+    assert "".join(seen) == resp.text      # 拼接一致不变量
+    assert "隐" not in "".join(seen)
+
+
+def test_create_provider_bad_base_url_friendly_exit():
+    from agent.config import AgentConfig
+    from agent.providers import create_provider
+    cfg = AgentConfig(model="m", api_key="k", base_url="https://api:minimaxi:com/v1")
+    with pytest.raises(SystemExit, match="base_url"):
+        create_provider(cfg)
