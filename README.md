@@ -13,7 +13,7 @@
 - **上下文管理**：真实 token 锚点 + 增量估算，接近窗口上限自动摘要压缩（保 Anthropic tool_use 配对），摘要失败降级截断
 - **权限门控**：default / acceptEdits / bypass 三模式，危险命令模式命中强制询问，会话级总是允许/拒绝记忆
 - **工作区硬边界**：Write/Edit 只允许写工作区内（`..` 逃逸、异盘、symlink 外指一律拒绝，bypass 不豁免）；docker 模式下 `/workspace/...` 容器路径自动映射到宿主工作区根
-- **命令沙箱（可选）**：`sandbox.mode: docker` 时 Bash 在长驻 Linux 容器内执行（无网络、内存/CPU/PID 上限、cap-drop ALL），会话结束自动清理容器；`sandbox.trusted: true` 时非危险命令免询问，危险模式仍弹（工作区是 rw 挂载）
+- **命令沙箱（可选）**：`sandbox.mode: docker` 时 Bash 在长驻 Linux 容器内执行（无网络、内存/CPU/PID 上限、capability 全弃仅回加 DAC_OVERRIDE），会话结束自动清理容器；`sandbox.trusted: true` 时非危险命令免询问，危险模式仍弹（工作区是 rw 挂载）
 - **注入防御**：system prompt v2 将"工具读入的外部内容"明确定义为不可信数据；环境说明运行时注入（去硬编码）
 - **会话持久化**：任务结束自动保存，`/resume` 编号或 ID 前缀恢复历史续聊，损坏文件隔离不炸列表
 - **可观测性**：JSONL 结构化日志（llm/tool/compact/权限事件）、按天轮转（默认保留 30 天）、`/stats` 任务与 token 统计

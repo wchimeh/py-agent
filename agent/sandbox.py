@@ -28,7 +28,8 @@ CONTAINER_WORKSPACE = "/workspace"   # 宿主工作区在容器内的固定挂�
 
 class DockerExecutor:
     """长驻受限容器 + 按命令 docker exec。懒启动：首次 run 才创建/复用容器。
-    加固：无网络、内存/CPU/pids 上限、丢弃全部 capability、禁止提权。"""
+    加固：无网络、内存/CPU/pids 上限、capability 全弃（仅回加 DAC_OVERRIDE 保容器 root
+    对挂载工作区的常规读写）、禁止提权。"""
 
     def __init__(self, name: str, image: str, workspace_host: str,
                  memory: str = "2g", cpus: float = 2.0):
@@ -55,6 +56,7 @@ class DockerExecutor:
                               "--cpus", str(self.cpus),
                               "--pids-limit", "256",
                               "--cap-drop", "ALL",
+                              "--cap-add", "DAC_OVERRIDE",
                               "--security-opt", "no-new-privileges",
                               "-v", f"{self.workspace_host}:{CONTAINER_WORKSPACE}",
                               "-w", CONTAINER_WORKSPACE,

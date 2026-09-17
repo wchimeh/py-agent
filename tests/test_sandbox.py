@@ -145,6 +145,9 @@ def test_docker_run_hardening_flags(monkeypatch):
                  "no-new-privileges", "--pids-limit", "256",
                  "--memory", "2g", "--cpus", "2.0"):
         assert flag in argv, f"docker run 缺少加固参数 {flag}: {argv}"
+    # drop ALL 后回加 DAC_OVERRIDE：否则容器 root 无力绕过 DAC，写不了非 root 属主的工作区（CI 实证）
+    assert argv[argv.index("--cap-add") + 1] == "DAC_OVERRIDE", argv
+    assert argv.index("--cap-drop") < argv.index("--cap-add")       # drop 先于 add
     assert argv[argv.index("-v") + 1] == "/tmp/ws:/workspace"   # 工作区固定挂载点
     assert argv[argv.index("-w") + 1] == "/workspace"
     assert "python:3.12-slim" in argv and "sleep" in argv       # 长驻容器
