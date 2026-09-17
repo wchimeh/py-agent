@@ -34,7 +34,8 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
       - run: pip install -e ".[dev]"
-      - run: pytest -q --cov=agent --cov=main --cov-report=term --cov-fail-under=85
+      # main.py / agent/viewer.py 为装配与平台交互薄层，已由 pyproject omit 显式豁免（见注释）
+      - run: pytest -q --cov=agent --cov-report=term --cov-fail-under=85
 
   build:
     runs-on: ubuntu-latest
