@@ -96,10 +96,15 @@ def run_command(command: str, timeout: int) -> tuple[int, str, str]:
 
 
 def probe_docker(timeout: int = 10) -> bool:
-    """docker CLI 与守护进程是否可用（未安装/守护进程未启动均返回 False）。"""
+    """docker CLI/守护进程可用且为 Linux 容器引擎（Windows 引擎不支持 pids-limit 与 Linux 镜像）。"""
+    r = None
     try:
-        r = subprocess.run(["docker", "version"], capture_output=True, text=True,
-                           encoding="utf-8", errors="replace", timeout=timeout)
+        for argv in (["docker", "version"],
+                     ["docker", "info", "--format", "{{.OSType}}"]):
+            r = subprocess.run(argv, capture_output=True, text=True,
+                               encoding="utf-8", errors="replace", timeout=timeout)
+            if r.returncode != 0:
+                return False
     except (OSError, subprocess.TimeoutExpired):
         return False
-    return r.returncode == 0
+    return r.stdout.strip().lower() == "linux"

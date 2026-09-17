@@ -213,11 +213,31 @@ def _restore_local():
     refresh_description()
 
 
+def _fake_engine(ostype: str, version_rc: int = 0):
+    """按子命令回放：version 查连通性，info 查 OSType（CI 实测 Windows 引擎不支持 pids-limit）。"""
+    def fake(argv, **kw):
+        if len(argv) > 1 and argv[1] == "info":
+            return SimpleNamespace(returncode=0, stdout=ostype, stderr="")
+        return SimpleNamespace(returncode=version_rc, stdout="", stderr="x")
+    return fake
+
+
 def test_probe_docker_ok(monkeypatch):
     from agent import sandbox
-    monkeypatch.setattr(sandbox.subprocess, "run",
-                        lambda argv, **kw: SimpleNamespace(returncode=0, stdout="", stderr=""))
+    monkeypatch.setattr(sandbox.subprocess, "run", _fake_engine("linux"))
     assert sandbox.probe_docker() is True
+
+
+def test_probe_docker_windows_engine_rejected(monkeypatch):
+    from agent import sandbox
+    monkeypatch.setattr(sandbox.subprocess, "run", _fake_engine("windows"))
+    assert sandbox.probe_docker() is False    # Windows 容器引擎跑不了 Linux 镜像与 pids-limit
+
+
+def test_probe_docker_engine_case_insensitive(monkeypatch):
+    from agent import sandbox
+    monkeypatch.setattr(sandbox.subprocess, "run", _fake_engine("Linux\n"))
+    assert sandbox.probe_docker() is True     # docker info 输出带换行/大小写容错
 
 
 def test_probe_docker_down(monkeypatch):
@@ -292,45 +312,62 @@ def test_env_note_docker():
 
 import shutil  # noqa: E402
 import uuid  # noqa: E402
+from pathlib import Path  # noqa: E402
 
 from agent.sandbox import probe_docker  # noqa: E402
 
 DOCKER_AVAILABLE = shutil.which("docker") is not None and probe_docker()
 
+IT_MOUNT_DIR = Path(__file__).resolve().parent.parent / "tmp_docker_it"
 
-def _real_docker(ws: str):
+
+def _it_ws(name: str) -> Path:
+    # 挂仓库内路径而非 pytest /tmp：GH 托管 runner 的 /tmp bind mount 会静默为空（CI 实证 2026-09-17）
+    d = IT_MOUNT_DIR / f"{name}-{uuid.uuid4().hex[:8]}"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _it_cleanup() -> None:
+    shutil.rmtree(IT_MOUNT_DIR, ignore_errors=True)
+
+
+def _real_docker(ws):
     from agent.sandbox import DockerExecutor
     return DockerExecutor(name=f"agent-sandbox-it-{uuid.uuid4().hex[:8]}",
                           image="python:3.12-slim", workspace_host=str(ws))
 
 
-@pytest.mark.skipif(not DOCKER_AVAILABLE, reason="本机无可用 docker（守护进程未运行或未安装）")
-def test_docker_it_echo_roundtrip(tmp_path):
-    d = _real_docker(tmp_path)
+@pytest.mark.skipif(not DOCKER_AVAILABLE, reason="本机无可用 docker（未安装/守护进程未运行/非 Linux 引擎）")
+def test_docker_it_echo_roundtrip():
+    d = _real_docker(_it_ws("echo"))
     try:
         rc, out, _ = d.run("echo hello-docker", timeout=60)
         assert rc == 0 and "hello-docker" in out
     finally:
         d.stop()
+        _it_cleanup()
 
 
 @pytest.mark.skipif(not DOCKER_AVAILABLE, reason="本机无可用 docker")
-def test_docker_it_workspace_shared_both_ways(tmp_path):
-    (tmp_path / "probe.txt").write_text("from-host", encoding="utf-8")
-    d = _real_docker(tmp_path)
+def test_docker_it_workspace_shared_both_ways():
+    ws = _it_ws("share")
+    (ws / "probe.txt").write_text("from-host", encoding="utf-8")
+    d = _real_docker(ws)
     try:
         rc, out, _ = d.run("cat /workspace/probe.txt", timeout=60)
         assert rc == 0 and "from-host" in out        # 宿主 → 容器
         rc, out, _ = d.run("echo from-container > /workspace/out.txt", timeout=60)
         assert rc == 0
-        assert (tmp_path / "out.txt").read_text(encoding="utf-8").strip() == "from-container"
+        assert (ws / "out.txt").read_text(encoding="utf-8").strip() == "from-container"
     finally:
         d.stop()
+        _it_cleanup()
 
 
 @pytest.mark.skipif(not DOCKER_AVAILABLE, reason="本机无可用 docker")
-def test_docker_it_network_denied(tmp_path):
-    d = _real_docker(tmp_path)
+def test_docker_it_network_denied():
+    d = _real_docker(_it_ws("net"))
     try:
         rc, _, _ = d.run(
             "python -c \"import urllib.request; urllib.request.urlopen('https://example.com', timeout=5)\"",
@@ -338,13 +375,15 @@ def test_docker_it_network_denied(tmp_path):
         assert rc != 0                               # --network none：出网必失败
     finally:
         d.stop()
+        _it_cleanup()
 
 
 @pytest.mark.skipif(not DOCKER_AVAILABLE, reason="本机无可用 docker")
-def test_docker_it_stop_removes_container(tmp_path):
+def test_docker_it_stop_removes_container():
     import subprocess as sp
-    d = _real_docker(tmp_path)
+    d = _real_docker(_it_ws("stop"))
     d.run("echo hi", timeout=60)
     d.stop()
+    _it_cleanup()
     r = sp.run(["docker", "inspect", d.name], capture_output=True, text=True, timeout=30)
     assert r.returncode != 0                        # 容器已被清理

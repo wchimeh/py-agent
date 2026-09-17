@@ -5,6 +5,7 @@ config.yaml
 # 运行产物（会话/日志/临时目录）
 .agent/
 tmp_demo/
+tmp_docker_it/
 docs/
 
 # Python
