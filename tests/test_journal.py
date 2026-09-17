@@ -169,3 +169,22 @@ def test_loop_without_journal_writes_no_files(tmp_path, monkeypatch):
     loop = AgentLoop(provider, permission_gate=BYPASS_GATE)
     assert loop.run("x") == "直接回答"
     assert os.listdir(tmp_path) == []
+
+
+def test_log_concurrent_writes_lines_intact(tmp_path):
+    # P17 M2：多线程并发 log，每行必须是完整 JSON（防交错撕裂；锁的回归守卫）
+    import threading
+    j = Journal(str(tmp_path / "c.jsonl"))
+
+    def burst(tag):
+        for i in range(60):
+            j.log("burst", tag=tag, i=i)
+
+    ts = [threading.Thread(target=burst, args=(f"t{k}",)) for k in range(8)]
+    for t in ts:
+        t.start()
+    for t in ts:
+        t.join()
+    lines = (tmp_path / "c.jsonl").read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 8 * 60
+    assert all(json.loads(ln)["event"] == "burst" for ln in lines)   # 全行可解析

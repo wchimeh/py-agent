@@ -210,3 +210,64 @@ def test_trusted_never_set_still_wins(monkeypatch):
     assert gate.authorize(tc("Bash", command="rm -rf /tmp/x"))[0] is False
     ok, _ = gate.authorize(tc("Bash", command="rm -rf /tmp/y"))
     assert ok is False and len(asked) == 1          # 危险命令 e 拒后短路，trusted 不复活它
+
+
+# ---------- P17 M1：SubGate 子代理非交互权限 ----------
+
+def test_subgate_read_tools_allowed():
+    from agent.permissions import SubGate
+    gate = SubGate(PermissionGate("default"))
+    for name in ("Read", "Glob", "Grep"):
+        assert gate.authorize(tc(name, file_path="x", pattern="y"))[0] is True
+
+
+def test_subgate_edit_tools_denied():
+    from agent.permissions import SubGate
+    gate = SubGate(PermissionGate("default"))
+    for name in ("Write", "Edit"):
+        ok, note = gate.authorize(tc(name, file_path="x"))
+        assert ok is False and "主会话" in note      # 引导回主会话
+
+
+def test_subgate_bash_denied_without_flag():
+    from agent.permissions import SubGate
+    parent = PermissionGate("default")
+    parent.always.add("Bash:ls")                     # 即使父会话记忆过
+    ok, note = SubGate(parent, allow_bash=False).authorize(tc("Bash", command="ls"))
+    assert ok is False and "非交互" in note
+
+
+def test_subgate_bash_allowed_with_flag_and_memory():
+    from agent.permissions import SubGate
+    parent = PermissionGate("default")
+    parent.always.add("Bash:ls")
+    ok, _ = SubGate(parent, allow_bash=True).authorize(tc("Bash", command="ls -la"))
+    assert ok is True
+
+
+def test_subgate_bash_without_memory_denied():
+    from agent.permissions import SubGate
+    parent = PermissionGate("default")
+    ok, note = SubGate(parent, allow_bash=True).authorize(tc("Bash", command="git status"))
+    assert ok is False and "总是允许" in note
+
+
+def test_subgate_bash_danger_still_denied():
+    from agent.permissions import SubGate
+    parent = PermissionGate("default")
+    parent.always.add("Bash:rm")                     # 危险检查先于会话记忆
+    ok, note = SubGate(parent, allow_bash=True).authorize(tc("Bash", command="rm -rf /"))
+    assert ok is False and "危险" in note
+
+
+def test_subgate_parent_bypass_does_not_grant_writes():
+    from agent.permissions import SubGate
+    gate = SubGate(PermissionGate("bypass"))
+    ok, _ = gate.authorize(tc("Write", file_path="x"))
+    assert ok is False                               # 子代理只读不随父 bypass 放开
+
+
+def test_subgate_unknown_tool_denied():
+    from agent.permissions import SubGate
+    ok, _ = SubGate(PermissionGate("default")).authorize(tc("Agent", description="x"))
+    assert ok is False

@@ -37,9 +37,10 @@ def register(cls):
     return cls
 
 
-def get_tool_defs() -> list[ToolDef]:
-
-    return [ToolDef(name=t.name, description=t.description, parameters=t.parameters) for t in _TOOLS.values()]
+def get_tool_defs(only: set[str] | None = None) -> list[ToolDef]:
+    """全部注册工具（only 白名单过滤：子代理按 loop 限定可见工具集）。"""
+    return [ToolDef(name=t.name, description=t.description, parameters=t.parameters)
+            for t in _TOOLS.values() if only is None or t.name in only]
 
 
 _ERR_ZH = {

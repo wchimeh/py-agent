@@ -2,6 +2,29 @@
 
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循语义化版本。
 
+## [1.1.0] - 2026-09-17
+
+多 Agent 三层递进：同步子代理 → 并行子代理 → 团队编排（P17）。
+
+### 多 Agent 协作
+- **子代理（Agent 工具）**：独立上下文窗口跑完任务只回灌结论（保护主上下文）；默认只读 Read/Grep/Glob（`subagent.allow_bash` 可开且仅限主会话已"总是允许"的命令前缀）；无 Agent 工具防递归；SubGate 非交互权限门（Write/Edit 一律拒，父 bypass 不放宽）
+- **并行子代理**：同回合 ≥2 个 Agent 调用线程池并发（`subagent.max_parallel` 默认 3），结果按原顺序回灌；并发期间流式文本只入 transcript、工具事件行经 console 锁带 `[sub-N]` 前缀直印；单 Agent 回合行为与同步模式完全一致
+- **团队编排（/team）**：leader 用 Spawn 派 worker 并发干活（复用子代理装配 + M2 并发分组）；任务板四工具 TaskCreate/TaskList/TaskUpdate/SendMessage；worker 回合内包干（跑完即回收，无常驻线程）；Spawn 正常返回即自动置 completed（任务板状态不依赖模型自觉调用 TaskUpdate，终止/未完成如实留 in_progress）；`team.max_workers` 上限友好拒
+- **进程级 token 总闸**：`BudgetPool` 主会话与全部子代理共用 `token_budget`，池尽全部终止（与单任务硬限文案区分）
+
+### 可观测性
+- **子代理输出查看**：transcript 有界留痕（2000 行/代理）；任务执行中 **Ctrl+T** 弹菜单选看任一子代理输出（查看期间后台照跑，可刷新）；任务间 `/agents [编号]` 回看；非交互终端自动降级提示
+- journal 加线程锁（多线程写同文件防交错撕行）、事件带 `agent` 字段（main/sub-N/team）；spawn/task_update/message 事件
+
+### 其他
+- system prompt v3：Agent 工具使用指引（何时拆派/任务书自包含/结论引用），`prompt_version: 2` 可回退
+- **/team leader 指令式说明**：执行类工作必须派 worker、leader 不亲自执行也不预先探查目录（用户敲 /team 即团队编排意图）
+- **修复 Glob/Grep 默认搜索根随进程 CWD 漂移**（P2 时代潜伏 bug，真机 /team 曝光）：默认/相对路径现锚定工作区根（`workspace.resolve_readable`）——`workspace_root` 配置为异于启动目录时不再搜错树
+- 环境说明（system prompt 运行时注入）补工作区根路径：模型对任务文件范围的认知不再依赖 Bash CWD 推断
+- 新配置节 `subagent`（max_turns/allow_bash/token_slice/max_parallel）与 `team`（max_workers）
+- 真机冒烟新增 S9（子代理拆派）/ S10（/team 团队协作）/ S11（leader 自律：自然语言目标也派工），共 10 用例
+- 测试 235 → 304 项，覆盖率 90%（branch ≥85 门禁保持），ruff 零告警
+
 ## [1.0.0] - 2026-09-16
 
 首个发布版本：类 Claude Code 的终端编码 Agent，达到工业化标准（P1~P16 全部落地）。

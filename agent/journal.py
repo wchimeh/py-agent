@@ -4,6 +4,7 @@
 import json
 import os
 import re
+import threading
 from contextlib import suppress
 from datetime import datetime, timedelta
 
@@ -14,6 +15,7 @@ class Journal:
 
     def __init__(self, path: str | None):
         self.path = path
+        self._lock = threading.Lock()   # 多线程 append 同文件防交错行（P17 M2）
         if path:
             os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
 
@@ -22,8 +24,9 @@ class Journal:
             return
         rec = {"ts": datetime.now().isoformat(timespec="seconds"),
                "event": event, **fields}
-        with open(self.path, "a", encoding="utf-8") as f:
-            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        line = json.dumps(rec, ensure_ascii=False) + "\n"
+        with self._lock, open(self.path, "a", encoding="utf-8") as f:
+            f.write(line)
 
     @classmethod
     def daily(cls, dir_: str = ".agent/logs", keep_days: int = 30) -> "Journal":

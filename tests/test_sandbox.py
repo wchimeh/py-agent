@@ -311,6 +311,12 @@ def test_env_note_docker():
     assert "/workspace" in note and "容器" in note
 
 
+def test_env_note_includes_workspace_root(ws):
+    import main
+    note = main._env_note(docker=False)
+    assert "工作区根" in note and str(ws) in note
+
+
 # ---------- 真实 docker 集成（CI ubuntu 自带 docker；本机不可用则跳过） ----------
 
 import shutil  # noqa: E402

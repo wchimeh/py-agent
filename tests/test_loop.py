@@ -2,6 +2,8 @@
 # @Author:   mjh
 # @DateTime: 2026/03/14
 """AgentLoop 工具往返测试：FakeProvider 脚本化响应，全程无网络。"""
+import os
+
 from agent.loop import AgentLoop
 from agent.permissions import PermissionGate
 from agent.providers.base import LLMResponse, StopReason, ToolCall
@@ -65,7 +67,7 @@ def test_journal_task_start_records_prompt_version():
     loop = AgentLoop(FakeProvider([_end_resp()]), permission_gate=BYPASS_GATE, journal=j)
     loop.run("hi")
     start = next(f for e, f in j.events if e == "task_start")
-    assert start["prompt"] == 2  # 默认最新版 system_v2（P16 M2 注入防御版）
+    assert start["prompt"] == 3  # 默认最新版 system_v3（P17 M1 子代理指引版）
     # P14：llm_call 的 token 数字段改名 prompt_tokens，prompt 只保留版本语义
     llm = next(f for e, f in j.events if e == "llm_call")
     assert llm["prompt_tokens"] == 10 and "prompt" not in llm
@@ -236,3 +238,85 @@ def test_streamed_max_tokens_notice_goes_to_stdout(capsys):
     assert out == "前半"                        # 返回值不带提示（已流式打印）
     printed = capsys.readouterr().out
     assert "截断" in printed and loop.last_streamed is True
+
+
+# ---------- P17 M1：allowed_tools / sink / budget_pool / agent_id ----------
+
+def test_allowed_tools_filters_defs_and_rejects_outside(ws, tmp_path):
+    seen = {}
+
+    class SpyProvider(FakeProvider):
+        def chat(self, messages, tools=None, system=""):
+            seen["tools"] = [t.name for t in (tools or [])]
+            return super().chat(messages, tools, system)
+
+    target = str(tmp_path / "no.txt")
+    call = ToolCall(id="t1", name="Write",
+                    arguments={"file_path": target, "content": "x"})
+    provider = SpyProvider([_tool_resp([call]), _end_resp()])
+    loop = AgentLoop(provider, max_turns=5, permission_gate=BYPASS_GATE,
+                     allowed_tools={"Read"})
+    loop.run("受限工具集")
+    assert seen["tools"] == ["Read"]                     # 告知模型的清单已过滤
+    err = next(m for m in loop.messages if m.role == "tool")
+    assert err.is_error                                  # 越界调用被拒并回灌
+    assert "Write" in err.content or "白名单" in err.content
+    assert not os.path.exists(target)                    # 未执行
+
+
+def test_sink_captures_lines_instead_of_stdout(ws, tmp_path, capsys):
+    class ListSink:
+        def __init__(self):
+            self.lines = []
+
+        def write(self, line):
+            self.lines.append(line)
+
+        def event(self, line):
+            self.lines.append(line)
+
+    target = str(tmp_path / "s.txt")
+    call = ToolCall(id="t1", name="Write",
+                    arguments={"file_path": target, "content": "hi"})
+    sink = ListSink()
+    provider = FakeProvider([_tool_resp([call]), _end_resp()])
+    AgentLoop(provider, max_turns=5, permission_gate=BYPASS_GATE,
+              sink=sink).run("捕获输出")
+    out = capsys.readouterr().out
+    assert "● Write(" not in out                         # 不再直印
+    assert any("● Write(" in ln for ln in sink.lines)    # 事件行入 transcript
+    assert any("✓" in ln for ln in sink.lines)           # 结果行入 transcript
+    assert sink.lines.index(next(ln for ln in sink.lines if "●" in ln)) < \
+        sink.lines.index(next(ln for ln in sink.lines if "✓" in ln))   # 行序保持
+
+
+def test_budget_pool_exhaustion_terminates_with_distinct_message(ws, tmp_path):
+    from agent.budget import BudgetPool
+    call = ToolCall(id="t1", name="Read", arguments={"file_path": "x"})
+    resp1 = LLMResponse(text=None, tool_calls=[call], stop_reason=StopReason.TOOL_USE,
+                        prompt_tokens=10, completion_tokens=2)
+    resp2 = LLMResponse(text=None, tool_calls=[call], stop_reason=StopReason.TOOL_USE,
+                        prompt_tokens=10, completion_tokens=2)
+    provider = FakeProvider([resp1, resp2, _end_resp()])
+    pool = BudgetPool(20)
+    loop = AgentLoop(provider, max_turns=10, token_budget=999999,
+                     permission_gate=BYPASS_GATE, budget_pool=pool)
+    result = loop.run("烧池")
+    assert result.startswith("[任务终止]") and "预算池" in result   # 区别于单任务预算文案
+    assert pool.used == 12            # consume(12) 成功后仅剩 8，第二次 12>8 拒付（不扣减）即终止
+    assert len(provider.script) == 1  # 第三次 LLM 调用未发生
+
+
+def test_agent_id_recorded_in_journal_events():
+    class FakeJournal:
+        def __init__(self):
+            self.events = []
+
+        def log(self, event, **fields):
+            self.events.append((event, fields))
+
+    j = FakeJournal()
+    AgentLoop(FakeProvider([_end_resp()]), permission_gate=BYPASS_GATE,
+              journal=j, agent_id="sub-1").run("hi")
+    start = next(f for e, f in j.events if e == "task_start")
+    assert start["agent"] == "sub-1"

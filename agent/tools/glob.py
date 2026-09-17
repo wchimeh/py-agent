@@ -33,7 +33,7 @@ class GlobTool(Tool):
         "type": "object",
         "properties": {
             "pattern": {"type": "string", "description": "glob 模式，** 匹配任意层目录"},
-            "path": {"type": "string", "description": "搜索目录，默认当前目录"},
+            "path": {"type": "string", "description": "搜索目录，默认工作区根"},
         },
         "required": ["pattern"],
     }
@@ -41,7 +41,7 @@ class GlobTool(Tool):
     def execute(self, pattern: str, path: str = ".") -> str:
         pattern = pattern.replace("\\", "/").lstrip("/")
         pat_parts = pattern.split("/")
-        root = os.path.abspath(workspace.map_path(path))
+        root = workspace.resolve_readable(path)
         hits: list[tuple[float, str]] = []
         for dirpath, dirnames, filenames in os.walk(root):
             rel_dir = os.path.relpath(dirpath, root)

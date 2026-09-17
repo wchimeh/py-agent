@@ -36,5 +36,16 @@ sandbox:
   memory: 2g
   cpus: 2.0
 
+# 子代理（Agent 工具：独立上下文跑检索/取证类任务，只回灌结论）
+subagent:
+  max_turns: 15            # 子代理单次任务回合上限
+  allow_bash: false        # 子代理可用 Bash（仍受主会话"总是允许"记忆约束）
+  token_slice: 100000      # 子代理单体 token 硬限（与主会话共用进程级总闸 token_budget）
+  max_parallel: 3          # 同回合子代理并发上限
+
+# 团队编排（/team：leader 用 Spawn 派 worker 并发干活，跑完回灌报告）
+team:
+  max_workers: 3           # 同时在跑 worker 上限（与 subagent.max_parallel 取小生效）
+
 # Prompt 版本（缺省 = 最新版；agent/prompts/system_v{N}.md 文件即版本）
 # prompt_version: 1

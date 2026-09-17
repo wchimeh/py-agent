@@ -82,6 +82,22 @@ def test_glob_matches(tmp_path):
 def test_glob_no_match(tmp_path):
     assert GlobTool().execute(pattern="*.zzz", path=str(tmp_path)) == "未匹配到文件"
 
+def test_glob_default_path_anchors_workspace_root(ws, tmp_path_factory, monkeypatch):
+    (ws / "anchor.py").write_text("x", encoding="utf-8")
+    elsewhere = tmp_path_factory.mktemp("elsewhere")
+    (elsewhere / "decoy.py").write_text("x", encoding="utf-8")
+    monkeypatch.chdir(elsewhere)               # 进程 CWD ≠ 工作区根
+    out = GlobTool().execute(pattern="**/*.py")   # 默认 path 不传
+    assert "anchor.py" in out and "decoy.py" not in out
+
+def test_grep_default_path_anchors_workspace_root(ws, tmp_path_factory, monkeypatch):
+    (ws / "anchor.py").write_text("NEEDLE-7749", encoding="utf-8")
+    elsewhere = tmp_path_factory.mktemp("elsewhere2")
+    (elsewhere / "decoy.py").write_text("NEEDLE-7749", encoding="utf-8")
+    monkeypatch.chdir(elsewhere)
+    out = GrepTool().execute(pattern="NEEDLE-7749")
+    assert "anchor.py" in out and "decoy.py" not in out
+
 def test_glob_skips_dependency_dirs(tmp_path):
     (tmp_path / ".venv").mkdir()
     (tmp_path / ".venv" / "dep.py").write_text("x", encoding="utf-8")
@@ -285,8 +301,9 @@ def test_bash_description_refreshes_for_docker(monkeypatch):
 
 # ---------- registry / execute_tool ----------
 
-def test_all_six_tools_registered():
-    assert set(_TOOLS) == {"Read", "Glob", "Grep", "Write", "Edit", "Bash"}
+def test_all_twelve_tools_registered():
+    assert set(_TOOLS) == {"Read", "Glob", "Grep", "Write", "Edit", "Bash", "Agent",
+                           "TaskCreate", "TaskList", "TaskUpdate", "SendMessage", "Spawn"}
 
 def _run(name, **kw):
     return execute_tool(ToolCall(id="t", name=name, arguments=kw))
@@ -399,3 +416,21 @@ def test_validation_error_schema_truncated():
     finally:
         registry._TOOLS.pop("BigSchema", None)
         registry._MODELS.pop("BigSchema", None)
+
+
+# ---------- registry 白名单（P17 M1：子代理按 loop 限定可见工具集） ----------
+
+def test_get_tool_defs_only_whitelist():
+    from agent.tools import get_tool_defs
+    defs = get_tool_defs(only={"Read", "Glob"})
+    assert {d.name for d in defs} == {"Read", "Glob"}
+
+
+def test_get_tool_defs_only_none_returns_all():
+    from agent.tools import get_tool_defs
+    assert {d.name for d in get_tool_defs()} == set(_TOOLS)
+
+
+def test_get_tool_defs_only_unknown_names_yield_empty():
+    from agent.tools import get_tool_defs
+    assert get_tool_defs(only={"NotExist"}) == []

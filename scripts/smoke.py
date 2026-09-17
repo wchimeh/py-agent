@@ -3,7 +3,7 @@
 """真实模型冒烟测试（P12/P16）：显式运行才产生 API 费用，pytest 不会收集本文件。
 
 用法：
-  python scripts/smoke.py             # 全量 7 用例（真实 API 调用；S8 视沙箱配置自动跳过）
+  python scripts/smoke.py             # 全量 10 用例（真实 API 调用；S8 视沙箱配置自动跳过）
   python scripts/smoke.py --list      # 只列出用例，零成本
   python scripts/smoke.py --only S1,S3
 """
@@ -185,6 +185,112 @@ def s8_docker_sandbox(cfg):
             docker_exec.stop()
 
 
+# ---------- S9 子代理拆派（P17 M1/M2 真机回归） ----------
+
+def s9_subagent(cfg):
+    from agent.budget import BudgetPool
+    from agent.tools import subagent
+    from agent.viewer import SubagentRegistry
+    with tempfile.TemporaryDirectory() as ws:
+        set_root(ws)
+        for name, text in (("a.txt", "apple\n" * 3), ("b.txt", "banana\n" * 5),
+                           ("c.txt", "cherry\n" * 7)):
+            with open(os.path.join(ws, name), "w", encoding="utf-8") as f:
+                f.write(text)
+        provider = create_provider(cfg)
+        pool = BudgetPool(TOKEN_BUDGET)
+        registry = SubagentRegistry()
+        subagent.configure(provider=provider, parent_gate=PermissionGate("bypass"),
+                           max_turns=8, token_slice=30000, budget_pool=pool,
+                           journal=None, registry=registry)
+        loop = new_loop(cfg, budget_pool=pool)
+        t0 = time.monotonic()
+        result = loop.run(
+            "用 Agent 工具派一个子代理（description=统计行数）。任务书必须自包含：分别读取 "
+            f"{os.path.join(ws, 'a.txt')}、{os.path.join(ws, 'b.txt')}、{os.path.join(ws, 'c.txt')}，"
+            "统计每个文件的行数，报告中给出三个数字。收到报告后原样转述这三个数字。")
+        snap = registry.snapshot()
+        a = loop.tool_calls.get("Agent", 0) >= 1
+        b = bool(snap) and any(r["status"] == "done" for r in snap)
+        c = all(x in result for x in ("3", "5", "7"))
+        note = (f"Agent×{loop.tool_calls.get('Agent', 0)} · 登记 {len(snap)} 个（"
+                f"{','.join(r['status'] for r in snap) or '无'}） · 三数字转述={c} · "
+                f"{time.monotonic() - t0:.1f}s · 人工验证项：交互模式任务执行期间 Ctrl+T 可选看 transcript")
+        return (a and b and c), note
+
+
+# ---------- S10 团队协作（P17 M3 真机回归） ----------
+
+def s10_team(cfg):
+    from agent.budget import BudgetPool
+    from agent.tools import subagent, team
+    from agent.viewer import SubagentRegistry
+    with tempfile.TemporaryDirectory() as ws:
+        set_root(ws)
+        p1, p2 = os.path.join(ws, "m1.txt"), os.path.join(ws, "m2.txt")
+        with open(p1, "w", encoding="utf-8") as f:
+            f.write("alpha\n" * 2)
+        with open(p2, "w", encoding="utf-8") as f:
+            f.write("beta\n" * 4)
+        team.reset()
+        provider = create_provider(cfg)
+        pool = BudgetPool(TOKEN_BUDGET * 2)
+        subagent.configure(provider=provider, parent_gate=PermissionGate("bypass"),
+                           max_turns=8, token_slice=30000, budget_pool=pool,
+                           journal=None, registry=SubagentRegistry())
+        team.configure(journal=None, max_workers=2)
+        loop = new_loop(cfg, budget_pool=pool, allowed_tools=None)
+        loop.system += team.leader_system_note()
+        t0 = time.monotonic()
+        result = loop.run(
+            "你是 leader：用 Spawn 工具在同一回合派两个 worker 并发干活——"
+            f"worker「甲」统计 {p1} 的行数；worker「乙」统计 {p2} 的行数"
+            "（任务书各自自包含）。收齐两份报告后，把两个行数一并告诉我。")
+        board = team.get_board()
+        a = loop.tool_calls.get("Spawn", 0) >= 2
+        b = bool(board.list_tasks()) and all(t.status == "completed"
+                                             for t in board.list_tasks())
+        c = ("2" in result and "4" in result)
+        note = (f"Spawn×{loop.tool_calls.get('Spawn', 0)} · 任务板 {len(board.list_tasks())} 项全 completed={b} · "
+                f"收件箱 {len(board.inbox)} 条 · 两行数转述={c} · {time.monotonic() - t0:.1f}s · "
+                f"并发耗时参考：串行约两倍")
+        return (a and b and c), note
+
+
+# ---------- S11 leader 自律（P17 任务 3-8：自然语言目标也必须派工） ----------
+
+def s11_leader_delegates(cfg):
+    from agent.budget import BudgetPool
+    from agent.tools import subagent, team
+    from agent.viewer import SubagentRegistry
+    with tempfile.TemporaryDirectory() as ws:
+        set_root(ws)
+        counts = {"t_a.py": 2, "t_b.py": 3, "t_c.py": 1}
+        for name, n in counts.items():
+            body = "\n".join(f"def test_{name[:-3]}_{i}():\n    assert True" for i in range(n))
+            with open(os.path.join(ws, name), "w", encoding="utf-8") as f:
+                f.write(body + "\n")
+        team.reset()
+        provider = create_provider(cfg)
+        pool = BudgetPool(TOKEN_BUDGET * 2)
+        subagent.configure(provider=provider, parent_gate=PermissionGate("bypass"),
+                           max_turns=8, token_slice=30000, budget_pool=pool,
+                           journal=None, registry=SubagentRegistry())
+        team.configure(journal=None, max_workers=2)
+        loop = new_loop(cfg, budget_pool=pool, allowed_tools=None)
+        from main import _env_note
+        loop.system += _env_note(docker=False) + team.leader_system_note()
+        t0 = time.monotonic()
+        result = loop.run("帮我统计这个目录里每个 Python 文件的测试函数数量，汇总给我。")
+        a = loop.tool_calls.get("Spawn", 0) >= 1        # 自然语言目标也必须派工
+        main_exec = sum(v for k, v in loop.tool_calls.items() if k in ("Bash", "Read", "Grep", "Glob"))
+        b = main_exec == 0                              # leader 不亲自执行
+        c = all(str(n) in result for n in counts.values())
+        note = (f"Spawn×{loop.tool_calls.get('Spawn', 0)} · leader 亲自执行 {main_exec} 次 · "
+                f"三数字齐={c} · {time.monotonic() - t0:.1f}s · 复现用户 /team 真机反馈场景")
+        return (a and b and c), note
+
+
 CASES = [
     ("S1", "流式长回答（增量/拼接/usage）", s1_stream),
     ("S2", "工具往返（Write→Read）", s2_tool_roundtrip),
@@ -193,6 +299,9 @@ CASES = [
     ("S5", "非流式 usage 统计", s5_chat_usage),
     ("S6", "think 剥离回归（P15）", s6_think_stripped),
     ("S8", "沙箱冒烟（容器执行/工作区互通/出网被拒）", s8_docker_sandbox),
+    ("S9", "子代理拆派（独立上下文回灌结论 + 登记留痕）", s9_subagent),
+    ("S10", "团队协作（leader 派 2 worker 并发 + 任务板流转）", s10_team),
+    ("S11", "leader 自律（自然语言目标也派工、不亲自执行）", s11_leader_delegates),
 ]
 
 

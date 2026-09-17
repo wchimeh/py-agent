@@ -18,7 +18,7 @@ class GrepTool(Tool):
         "type": "object",
         "properties": {
             "pattern": {"type": "string", "description": "正则表达式"},
-            "path": {"type": "string", "description": "搜索目录或单文件，默认当前目录"},
+            "path": {"type": "string", "description": "搜索目录或单文件，默认工作区根"},
             "glob": {"type": "string", "description": "文件名过滤，如 *.py"},
         },
         "required": ["pattern"],
@@ -30,7 +30,7 @@ class GrepTool(Tool):
             rx = re.compile(pattern)
         except re.error as e:
             raise ToolError(f"正则表达式无效：{e}") from e
-        root = Path(workspace.map_path(path))
+        root = Path(workspace.resolve_readable(path))
         if root.is_file():
             files = [root]
         else:

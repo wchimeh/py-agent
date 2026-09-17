@@ -35,6 +35,14 @@ def map_path(path: str) -> str:
     return path
 
 
+def resolve_readable(path: str) -> str:
+    """读类搜索根：相对路径锚定工作区根（与 resolve_writable 同语义，但不做边界检查）。"""
+    p = map_path(path)
+    if os.path.isabs(p):
+        return os.path.abspath(p)
+    return os.path.abspath(os.path.join(WORKSPACE_ROOT, p))
+
+
 def resolve_writable(path: str) -> str:
     """校验并返回规范化绝对路径；相对路径按工作区根解析（不随进程 cwd 漂移）。"""
     path = map_path(path)

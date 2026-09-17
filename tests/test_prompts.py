@@ -9,18 +9,28 @@ from agent.prompts import PromptError, latest_version, load_prompt
 def test_load_system_default():
     assert "运行在终端里的编码助手" in load_prompt("system")
 
-def test_latest_version_system_is_2():
-    # P16 M2：system_v2（注入防御）落地后默认版本为 2
-    assert latest_version("system") == 2
+def test_latest_version_system_is_3():
+    # P17 M1：system_v3（子代理指引）落地后默认版本为 3
+    assert latest_version("system") == 3
 
 def test_system_v2_injection_defense_clause():
-    v2 = load_prompt("system")
+    v2 = load_prompt("system", version=2)
     assert "不可信" in v2 and "不执行" in v2      # 外部内容不可信边界
 
 def test_system_v2_drops_hardcoded_windows():
-    v2 = load_prompt("system")
+    v2 = load_prompt("system", version=2)
     assert "cmd.exe" not in v2                     # 环境说明改为运行时注入
     assert "环境说明" in v2
+
+def test_system_v3_agent_tool_guidance():
+    v3 = load_prompt("system")
+    assert "Agent" in v3 and "子代理" in v3        # 子代理拆派指引
+    assert "自包含" in v3                          # 任务书须自包含
+    assert "只读" in v3                            # 子代理权限边界
+
+def test_load_system_pin_v2():
+    v2 = load_prompt("system", version=2)
+    assert "Agent" not in v2                       # v2 无子代理指引（可回退）
 
 def test_load_system_pin_v1():
     assert "运行在终端里的编码助手" in load_prompt("system", version=1)

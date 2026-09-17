@@ -112,3 +112,35 @@ class PermissionGate:
             self.never.add(key)
         return False, f"用户拒绝了 {tc.name} 调用（{key}），请调整方案或向用户说明意图"
 
+
+class SubGate:
+    """子代理权限门：非交互（永不弹询问），只读为默认。
+    Write/Edit 一律拒（写操作回主会话）；Bash 仅当 allow_bash 且父会话已"总是允许"
+    该命令前缀且非危险模式时放行；父 bypass 不放宽（子代理永远无写权）。
+    extra_tools：worker 场景追加放行（任务板工具等，发起方白名单已含）。"""
+
+    def __init__(self, parent: "PermissionGate", allow_bash: bool = False,
+                 extra_tools: set[str] | None = None):
+        self.parent = parent
+        self.allow_bash = allow_bash
+        self.extra = set(extra_tools or ())
+
+    def authorize(self, tc: ToolCall) -> tuple[bool, str]:
+        if tc.name in READ_ONLY_TOOLS or tc.name in self.extra:
+            return True, ""
+        if tc.name in EDIT_TOOLS:
+            return False, ("子代理为只读模式，无权写文件（Write/Edit）："
+                           "请在报告中说明要做的修改，由主会话执行")
+        if tc.name == "Bash":
+            danger = match_danger(str(tc.arguments.get("command", "")))
+            if danger:
+                return False, f"子代理无法执行危险命令（{danger}）：请在主会话确认执行"
+            if not self.allow_bash:
+                return False, ("子代理未启用 Bash（config subagent.allow_bash）"
+                               "且非交互无法询问：请在主会话执行")
+            if self.parent._key(tc) in self.parent.always:
+                return True, ""
+            return False, ("子代理非交互，仅可执行主会话已'总是允许'的命令前缀："
+                           "其余命令请在主会话确认")
+        return False, f"子代理不可用工具 {tc.name}（可用工具由发起方白名单限定）"
+

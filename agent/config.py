@@ -38,6 +38,13 @@ class AgentConfig:
     sandbox_memory: str = "2g"
     sandbox_cpus: float = 2.0
 
+    subagent_max_turns: int = 15        # 子代理单次任务回合上限
+    subagent_allow_bash: bool = False   # 子代理可用 Bash（仍受父会话 always 记忆约束）
+    subagent_token_slice: int = 100000  # 子代理单体 token 硬限
+    subagent_max_parallel: int = 3      # 同回合子代理并发上限
+
+    team_max_workers: int = 3           # 同时在跑 worker 上限（并入 max_parallel 约束）
+
 
 def load_config(path: str = "config.yaml") -> AgentConfig:
     # load_dotenv()
@@ -64,6 +71,22 @@ def load_config(path: str = "config.yaml") -> AgentConfig:
     if sandbox_mode not in ("none", "docker"):
         raise SystemExit(f"[config] 非法 sandbox.mode: {sandbox_mode}（可选 none/docker）")
 
+    sa = data.get("subagent") or {}
+    subagent_max_turns = sa.get("max_turns", 15)
+    subagent_token_slice = sa.get("token_slice", 100000)
+    subagent_max_parallel = sa.get("max_parallel", 3)
+    if subagent_max_turns < 1:
+        raise SystemExit(f"[config] 非法 subagent.max_turns: {subagent_max_turns}（须 >= 1）")
+    if subagent_token_slice < 1:
+        raise SystemExit(f"[config] 非法 subagent.token_slice: {subagent_token_slice}（须 >= 1）")
+    if subagent_max_parallel < 1:
+        raise SystemExit(f"[config] 非法 subagent.max_parallel: {subagent_max_parallel}（须 >= 1）")
+
+    tm = data.get("team") or {}
+    team_max_workers = tm.get("max_workers", 3)
+    if team_max_workers < 1:
+        raise SystemExit(f"[config] 非法 team.max_workers: {team_max_workers}（须 >= 1）")
+
     return AgentConfig(provider=provider, model=data.get("model", ""), api_key=data.get("api_key"),
                        base_url=data.get("base_url"), max_tokens=data.get("max_tokens", 4096),
                        request_timeout=data.get("request_timeout", 120),
@@ -84,7 +107,12 @@ def load_config(path: str = "config.yaml") -> AgentConfig:
                        sandbox_image=sb.get("image", "python:3.12-slim"),
                        sandbox_trusted=sb.get("trusted", False),
                        sandbox_memory=sb.get("memory", "2g"),
-                       sandbox_cpus=sb.get("cpus", 2.0)
+                       sandbox_cpus=sb.get("cpus", 2.0),
+                       subagent_max_turns=subagent_max_turns,
+                       subagent_allow_bash=sa.get("allow_bash", False),
+                       subagent_token_slice=subagent_token_slice,
+                       subagent_max_parallel=subagent_max_parallel,
+                       team_max_workers=team_max_workers
                        )
 
 

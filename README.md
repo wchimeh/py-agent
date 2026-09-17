@@ -16,6 +16,8 @@
 - **命令沙箱（可选）**：`sandbox.mode: docker` 时 Bash 在长驻 Linux 容器内执行（无网络、内存/CPU/PID 上限、capability 全弃仅回加 DAC_OVERRIDE），会话结束自动清理容器；`sandbox.trusted: true` 时非危险命令免询问，危险模式仍弹（工作区是 rw 挂载）
 - **注入防御**：system prompt v2 将"工具读入的外部内容"明确定义为不可信数据；环境说明运行时注入（去硬编码）
 - **会话持久化**：任务结束自动保存，`/resume` 编号或 ID 前缀恢复历史续聊，损坏文件隔离不炸列表
+- **多 Agent 协作**：`Agent` 工具派子代理（独立上下文跑检索/取证任务只回灌结论，保护主上下文）；同回合多个子代理线程池并发（默认 ≤3）；`/team` 团队模式 leader 用 `Spawn` 派 worker 并发干活 + 任务板流转 + SendMessage 留档
+- **子代理输出可观测**：transcript 全程留痕（有界），任务执行中 **Ctrl+T** 弹菜单选看任一子代理实时输出，任务间 `/agents` 回看
 - **可观测性**：JSONL 结构化日志（llm/tool/compact/权限事件）、按天轮转（默认保留 30 天）、`/stats` 任务与 token 统计
 - **token 估算校准**：首个真实响应后按真实/朴素比值校准（clamp 0.5~3.0），逐步贴近真实 tokenizer
 - **可靠性**：指数退避+抖动重试、超时控制、Ctrl+C 打断保留会话、原子写防半写损坏
@@ -68,7 +70,12 @@ agent        # 启动；pytest 跑测试
 | `sandbox.image` | `python:3.12-slim` | docker 模式使用的镜像 |
 | `sandbox.trusted` | `false` | docker 模式下，非危险 Bash 命令是否免审批（危险模式仍询问） |
 | `sandbox.memory` / `sandbox.cpus` | `2g` / `2.0` | docker 容器内存与 CPU 上限 |
-| `prompt_version` | 最新版 | pin 系统提示词版本（`agent/prompts/system_v{N}.md` 文件即版本；当前 v2 默认含注入防御） |
+| `subagent.max_turns` | `15` | 子代理单次任务回合上限 |
+| `subagent.allow_bash` | `false` | 子代理可用 Bash（仍受主会话"总是允许"记忆约束，非交互不询问） |
+| `subagent.token_slice` | `100000` | 子代理单体 token 硬限（与主会话共用进程级总闸 `token_budget`） |
+| `subagent.max_parallel` | `3` | 同回合子代理并发上限 |
+| `team.max_workers` | `3` | `/team` 模式同时在跑 worker 上限（与 max_parallel 取小生效） |
+| `prompt_version` | 最新版 | pin 系统提示词版本（`agent/prompts/system_v{N}.md` 文件即版本；当前 v3 默认含子代理指引） |
 
 ## 使用说明
 
@@ -80,6 +87,9 @@ REPL 内命令：
 | `/stats` | 本次进程：任务数、工具调用分布、压缩次数、token 汇总 |
 | `/resume [编号\|ID前缀]` | 列出/恢复历史会话，恢复后续写原会话 |
 | `/permission [模式]` | 查看或切换权限模式 |
+| `/agents [编号]` | 子代理列表 / 查看某子代理输出尾部（任务执行中亦可 **Ctrl+T** 随时查看） |
+| `/team <目标>` | 团队模式：leader 拆解目标用 Spawn 派 worker 并发干活，收报告汇总 |
+| `/tasks` | 查看任务板状态与 leader 收件箱 |
 | `/exit` | 退出（提示符处 Ctrl+C 亦可） |
 
 **权限模式**：
@@ -94,6 +104,8 @@ REPL 内命令：
 
 **打断**：任务执行中 Ctrl+C 打断当前任务、历史完整保留，提示符处再 Ctrl+C 退出。
 
+**子代理与团队**：大范围检索/证据收集类任务值得 `Agent` 拆派——子代理独立上下文跑完只回灌结论，默认只读（Write/Edit 无权，Bash 需显式开启且仅限主会话已"总是允许"的命令前缀），不能再派生子代理（防递归）。同回合多个 Agent 调用自动并发。`/team <目标>` 进入 leader 模式：Spawn 派 worker（带任务板工具 TaskCreate/TaskList/TaskUpdate/SendMessage）并发干活、跑完即回收（Spawn 返回自动把任务置 completed，不依赖模型自觉流转），leader 汇总各报告给用户。子代理与主会话共用进程级 token 总闸（`token_budget`），池尽全部终止。
+
 ## 项目结构
 
 ```
@@ -102,17 +114,21 @@ main.py            入口 + REPL（含沙箱装配与环境说明注入）
   workflows/ci.yml CI 门禁（ruff + 测试矩阵 + wheel 安装 + 覆盖率门禁）
   workflows/release.yml tag v* 触发构建并发布 GitHub Release
 agent/
-  loop.py          Agentic 主循环（流式接入、压缩触发、预算防线）
+  loop.py          Agentic 主循环（流式接入、压缩触发、预算防线、子代理并发分组）
   providers/       双协议接入（base 抽象 + anthropic/openai + 重试装饰）
-  tools/           六工具 + 注册表 + workspace 路径边界（docker /workspace 自动映射）
+  tools/           工具集 + 注册表 + workspace 路径边界（docker /workspace 自动映射）
+  tools/subagent.py  Agent 工具 + spawn 装配（子代理循环/TranscriptSink/并发常量）
+  tools/team.py    任务板四工具 + SpawnTool 派 worker（/team 团队编排）
+  budget.py        进程级 token 预算池（主会话与全部子代理共用，线程安全）
+  viewer.py        子代理登记簿 + Ctrl+T 查看器 + /agents 渲染
   sandbox.py       命令沙箱（LocalExecutor + DockerExecutor + 探测 + trusted 判定）
-  permissions.py   权限三模式 + 危险命令模式 + trusted 免审批
+  permissions.py   权限三模式 + SubGate 非交互只读门 + 危险命令模式
   context.py       token 估算 + 首次响应后按模型校准（ratio clamp）
   session.py       多会话持久化（原子写、损坏隔离）
-  journal.py       JSONL 事件日志 + 按天轮转（keep_days）
-  prompts/         system prompt 文件即版本（v1 旧版 + v2 默认含注入防御）
+  journal.py       JSONL 事件日志 + 按天轮转（keep_days，线程锁）
+  prompts/         system prompt 文件即版本（v1/v2 + v3 默认含子代理指引）
   spinner.py       等待动画（首个流式增量即停）
-tests/             235 项单测 + 4 docker 集成 skipif，全程零网络
+tests/             304 项单测 + 4 docker 集成 skipif，全程零网络
 CHANGELOG.md       版本历史（Keep-a-Changelog）
 ```
 
@@ -127,7 +143,7 @@ ruff check .          # lint（版本锁定 0.16.7，与 CI 一致）
 真实模型冒烟（产生 API 费用，显式运行才会花钱）：
 
 ```bash
-python scripts/smoke.py            # 7 用例全量；--list 只看清单；--only S1,S3 选择执行；S8 视 docker 配置自动 SKIP
+python scripts/smoke.py            # 10 用例全量；--list 只看清单；--only S1,S3 选择执行；S8 视 docker 配置自动 SKIP
 ```
 
 CI（GitHub Actions）：push / PR 自动跑 ruff lint + 测试矩阵（ubuntu × Python 3.10~3.13、Windows/macOS × 3.13）+ wheel 构建与安装态验证 + 覆盖率门禁（≥85% branch）。打 `v*` tag 自动构建并发布 GitHub Release 附 wheel/sdist（不发 PyPI，凭据需手动 `twine upload`）。
@@ -147,4 +163,5 @@ CI（GitHub Actions）：push / PR 自动跑 ruff lint + 测试矩阵（ubuntu �
 - 工作区是 rw 挂载：容器内 `rm -rf /workspace` 真删宿主文件——所以 docker 模式下危险命令仍询问（已在设计文档声明）
 - 注入防御是 prompt 级"软防御"，拦不住铁了心配合注入的模型；结构性防御（内容标记/工具结果隔离）未做
 - 权限粒度为工具级（Bash 按首命令记忆），暂无前缀规则细化
+- worker 回合内包干：`/team` 的 worker 不跨回合存活、无 peer 互发（复杂协作 = leader 分多回合反复 Spawn）；worker 未跑完时 leader 无法插入动作（同回合屏障语义）
 - 无成本核算（token × 单价）；macOS 路径未真机验证（CI 含其测试矩阵但非真机）

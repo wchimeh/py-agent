@@ -6,6 +6,7 @@ import sys
 
 from prompt_toolkit import prompt
 
+from agent.budget import BudgetPool
 from agent.config import load_config
 from agent.journal import Journal
 from agent.loop import AgentLoop
@@ -20,8 +21,12 @@ from agent.session import (
     new_session_id,
     save_session,
 )
+from agent.tools import subagent, team
 from agent.tools.bash import refresh_description
+from agent.tools.registry import get_tool_defs
+from agent.tools.team import TEAM_TOOL_NAMES
 from agent.tools.workspace import get_root, set_root
+from agent.viewer import KeyListener, SubagentRegistry, browse
 
 OLD_SESSION = ".agent/session.json"   # P6 初版单文件，已停用
 
@@ -48,8 +53,10 @@ def _env_note(docker: bool, nt: bool = os.name == "nt") -> str:
                 "宿主工作区挂载于 /workspace；所有工具统一用 /workspace/... 路径"
                 "（文件工具会自动映射到宿主工作区）")
     if nt:
-        return "\n  - 运行环境：Windows，Bash 命令走 cmd.exe，优先使用跨平台命令"
-    return "\n  - 运行环境：Linux/macOS，Bash 命令走 POSIX shell"
+        return (f"\n  - 运行环境：Windows，Bash 命令走 cmd.exe，优先使用跨平台命令；"
+                f"工作区根：{get_root()}（Glob/Grep 未传 path 时在此搜索，任务范围以此为准）")
+    return (f"\n  - 运行环境：Linux/macOS，Bash 命令走 POSIX shell；"
+            f"工作区根：{get_root()}（Glob/Grep 未传 path 时在此搜索，任务范围以此为准）")
 
 
 def _hint_resume():
@@ -88,7 +95,31 @@ def _apply_resume(loop, session: dict) -> str:
     return session["id"]
 
 
+def _run_task(loop, registry, text: str) -> None:
+    """单次任务执行：挂载 Ctrl+T 监听 + 异常粗捕获（/team 与普通任务共用）。"""
+    listener = KeyListener(registry)   # Ctrl+T 仅任务执行期间挂载（提示符归 prompt_toolkit）
+    if not listener.start() and not start_loop._ctrl_t_hinted:
+        print("[agent] Ctrl+T 查看器不可用（非交互终端），任务间可用 /agents 浏览")
+        start_loop._ctrl_t_hinted = True
+    try:
+        result = loop.run(text)
+        if not loop.last_streamed:
+            print(result)   # 流式回合已逐段打印过，不再重印全文
+        p, c, s = loop.last_usage
+        print(f"  \n[stats] 本次 ↑{p} ↓{c} · {s:.1f}s"
+              f" | 累计 ↑{loop.total_prompt_tokens} ↓{loop.total_completion_tokens}")
+    except KeyboardInterrupt:  # 必须在 except Exception 之前
+        print("\n[agent] 任务已打断，会话历史保留（提示符处 Ctrl+C 退出）")
+    except AgentError as e:
+        print(f"[错误] {e}")
+    except Exception as e:  # 粗捕获保进程
+        print(f"[错误] {type(e).__name__}: {e}")
+    finally:
+        listener.stop()   # 终端所有权归还 prompt_toolkit
+
+
 def start_loop():
+    start_loop._ctrl_t_hinted = False   # Ctrl+T 降级提示只打一次
     sys.stdout.reconfigure(encoding="utf-8")
     sys.stderr.reconfigure(encoding="utf-8")
     cfg = load_config()
@@ -97,11 +128,20 @@ def start_loop():
     sid = new_session_id()
     docker_exec = _setup_sandbox(cfg, sid)
     journal = Journal.daily(keep_days=cfg.journal_keep_days) if cfg.journal else None
-    loop = AgentLoop(create_provider(cfg), prompt_version=cfg.prompt_version,
+    provider = create_provider(cfg)
+    pool = BudgetPool(cfg.token_budget)   # 进程级总闸：主循环与全部子代理共用
+    loop = AgentLoop(provider, prompt_version=cfg.prompt_version,
                      max_turns=cfg.max_turns, token_budget=cfg.token_budget,
                      permission_gate=gate, context_window=cfg.context_window, compact_threshold=cfg.compact_threshold,
-                     keep_recent=cfg.keep_recent, journal=journal
-                     )
+                     keep_recent=cfg.keep_recent, journal=journal, budget_pool=pool,
+                     allowed_tools={d.name for d in get_tool_defs()} - TEAM_TOOL_NAMES,
+                     )   # 团队工具仅 /team leader 语境放开
+    registry = SubagentRegistry()   # 子代理登记簿：Ctrl+T（任务中）/ /agents（任务间）查看
+    subagent.configure(provider=provider, parent_gate=gate,
+                       max_turns=cfg.subagent_max_turns, allow_bash=cfg.subagent_allow_bash,
+                       token_slice=cfg.subagent_token_slice, budget_pool=pool, journal=journal,
+                       max_parallel=cfg.subagent_max_parallel, registry=registry)
+    team.configure(journal=journal, max_workers=cfg.team_max_workers)
     if docker_exec:
         loop.system += _env_note(docker=True)
     else:
@@ -111,6 +151,9 @@ def start_loop():
     if docker_exec:
         print(f"[agent] 沙箱=docker（{cfg.sandbox_image}，trusted={cfg.sandbox_trusted}）"
               f"容器 {docker_exec.name}，退出时自动清理")
+    print(f"[agent] 子代理=启用（只读，max_turns={cfg.subagent_max_turns}，"
+          f"allow_bash={str(cfg.subagent_allow_bash).lower()}，"
+          f"并发≤{cfg.subagent_max_parallel}；任务中 Ctrl+T / 任务间 /agents 查看输出）")
     print(f"[agent] 本次会话 {sid}")
     _hint_resume()
     try:
@@ -126,7 +169,17 @@ def start_loop():
                 return
             if user_input == "/help":
                 print("[命令] /help 命令列表 · /stats 会话统计 · /resume [编号|ID前缀] 恢复会话\n"
-                      "        /permission [default/acceptEdits/bypass] 查看/切换权限 · /exit 退出")
+                      "        /permission [default/acceptEdits/bypass] 查看/切换权限 · /exit 退出\n"
+                      "        /agents [编号] 子代理列表/查看其输出（任务中可 Ctrl+T）\n"
+                      "        /team <目标> 团队模式（leader 派 worker 并发干活） · /tasks 任务板与收件箱")
+                continue
+            if user_input == "/agents":
+                print(browse(registry))
+                continue
+            if user_input.startswith("/agents "):
+                arg = user_input.split(maxsplit=1)[1].strip()
+                print(browse(registry, selection=int(arg)) if arg.isdigit()
+                      else "[agent] 用法：/agents [编号]")
                 continue
             if user_input == "/stats":
                 tools = " ".join(f"{k}×{v}" for k, v in sorted(loop.tool_calls.items())) or "无"
@@ -169,19 +222,28 @@ def start_loop():
                 except ValueError:
                     print("[agent] 未知模式，可选 default/acceptEdits/bypass")
                 continue
-            try:
-                result = loop.run(user_input)
-                if not loop.last_streamed:
-                    print(result)   # 流式回合已逐段打印过，不再重印全文
-                p, c, s = loop.last_usage
-                print(f"  \n[stats] 本次 ↑{p} ↓{c} · {s:.1f}s"
-                      f" | 累计 ↑{loop.total_prompt_tokens} ↓{loop.total_completion_tokens}")
-            except KeyboardInterrupt:  # 必须在 except Exception 之前
-                print("\n[agent] 任务已打断，会话历史保留（提示符处 Ctrl+C 退出）")
-            except AgentError as e:
-                print(f"[错误] {e}")
-            except Exception as e:  # 粗捕获保进程
-                print(f"[错误] {type(e).__name__}: {e}")
+            if user_input == "/tasks":
+                board = team.get_board()
+                print(board.summary())
+                print(board.inbox_summary())
+                continue
+            if user_input.startswith("/team "):
+                goal = user_input.split(maxsplit=1)[1].strip()
+                if goal:
+                    saved_tools, saved_system = loop.allowed_tools, loop.system
+                    loop.allowed_tools = None            # leader 可见全部（含 Spawn/任务板）
+                    loop.system = loop.system + team.leader_system_note()
+                    try:
+                        _run_task(loop, registry, goal)
+                    finally:
+                        loop.allowed_tools, loop.system = saved_tools, saved_system
+                    if cfg.save_session:
+                        try:
+                            save_session(sid, loop.messages)
+                        except OSError as e:
+                            print(f"[agent] ⚠ 会话保存失败: {e}")
+                continue
+            _run_task(loop, registry, user_input)
             if cfg.save_session:  # 正常/打断/报错三种结局都保存
                 try:
                     save_session(sid, loop.messages)
