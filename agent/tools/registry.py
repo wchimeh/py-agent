@@ -31,10 +31,25 @@ def _build_model(tool: Tool) -> type[BaseModel]:
 
 
 def register(cls):
-    tool = cls()
-    _TOOLS[tool.name] = tool
-    _MODELS[tool.name] = _build_model(tool)
+    register_tool(cls())
     return cls
+
+
+def register_tool(tool: Tool, validate: bool = True) -> None:
+    """运行期动态注册（MCP 远端工具等）；同名后注册覆盖。
+    validate=False 时参数原样透传不本地校验（远端 schema 千奇百怪，
+    本地简化校验会错杀合法调用，错误由远端返回后回灌）。"""
+    _TOOLS[tool.name] = tool
+    _MODELS[tool.name] = _build_model(tool) if validate else None
+
+
+def unregister_prefix(prefix: str) -> int:
+    """按名称前缀摘除动态注册的工具（如 mcp__），返回摘除数量。"""
+    names = [n for n in _TOOLS if n.startswith(prefix)]
+    for n in names:
+        _TOOLS.pop(n)
+        _MODELS.pop(n, None)
+    return len(names)
 
 
 def get_tool_defs(only: set[str] | None = None) -> list[ToolDef]:
@@ -88,7 +103,9 @@ def check_tool_call(tc: ToolCall) -> str | None:
         return (f"工具调用参数不是合法 JSON，原始片段：{tc.arguments[MALFORMED_ARGS_KEY]}。"
                 f"请按 schema 重新生成：{_schema_hint(tool)}")
     try:
-        _MODELS[tc.name].model_validate(tc.arguments)
+        model = _MODELS[tc.name]
+        if model is not None:
+            model.model_validate(tc.arguments)
     except ValidationError as e:
         return _format_validation_error(tool, e)
     return None
@@ -98,9 +115,11 @@ def execute_tool(tc: ToolCall) -> tuple[str, bool]:
     if err := check_tool_call(tc):
         return err, True
     tool = _TOOLS[tc.name]
-    m = _MODELS[tc.name].model_validate(tc.arguments)
+    model = _MODELS[tc.name]
+    kwargs = (model.model_validate(tc.arguments).model_dump(exclude_unset=True)
+              if model is not None else dict(tc.arguments))
     try:
-        return tool.execute(**m.model_dump(exclude_unset=True)), False
+        return tool.execute(**kwargs), False
     except ToolError as e:
         return str(e), True
     except Exception as e:

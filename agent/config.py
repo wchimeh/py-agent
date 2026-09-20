@@ -2,11 +2,23 @@
 # @Author:   mjh
 # @DateTime: 2026/03/14/15:33
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import yaml
 
 # from dotenv import load_dotenv
+
+
+@dataclass
+class MCPServerConfig:
+    name: str
+    transport: str = "stdio"        # stdio | http（Streamable HTTP）
+    command: str = ""               # stdio：可执行程序（Windows 上 npx 须写 npx.cmd 视真机验证）
+    args: list = field(default_factory=list)
+    env: dict | None = None         # 整体替换子进程环境（缺省继承精选变量，SDK 语义）
+    url: str = ""                   # http：server 端点
+    headers: dict = field(default_factory=dict)   # http：鉴权等请求头
+
 
 @dataclass
 class AgentConfig:
@@ -44,6 +56,9 @@ class AgentConfig:
     subagent_max_parallel: int = 3      # 同回合子代理并发上限
 
     team_max_workers: int = 3           # 同时在跑 worker 上限（并入 max_parallel 约束）
+
+    mcp_servers: dict = field(default_factory=dict)   # 名 → MCPServerConfig
+    mcp_call_timeout: int = 60          # MCP 工具调用超时（秒，全局统一）
 
 
 def load_config(path: str = "config.yaml") -> AgentConfig:
@@ -87,6 +102,37 @@ def load_config(path: str = "config.yaml") -> AgentConfig:
     if team_max_workers < 1:
         raise SystemExit(f"[config] 非法 team.max_workers: {team_max_workers}（须 >= 1）")
 
+    mc = data.get("mcp") or {}
+    unknown = set(mc) - {"call_timeout", "servers"}
+    if unknown:
+        raise SystemExit(f"[config] mcp 段存在未知键: {', '.join(sorted(unknown))}"
+                         f"（合法键：call_timeout/servers；server 须配置在 mcp.servers.<名字> 下）")
+    mcp_call_timeout = mc.get("call_timeout", 60)
+    if not isinstance(mcp_call_timeout, int) or isinstance(mcp_call_timeout, bool) \
+            or mcp_call_timeout < 1:
+        raise SystemExit(f"[config] 非法 mcp.call_timeout: {mcp_call_timeout}（须 >= 1 的整数秒）")
+    raw_servers = mc.get("servers") or {}
+    if not isinstance(raw_servers, dict):
+        raise SystemExit("[config] 非法 mcp.servers（须为 server 名到配置的映射）")
+    mcp_servers: dict[str, MCPServerConfig] = {}
+    for name, s in raw_servers.items():
+        s = s or {}
+        transport = s.get("transport", "stdio")
+        if transport not in ("stdio", "http", "sse"):
+            raise SystemExit(f"[config] 非法 mcp.servers.{name}.transport: {transport}（可选 stdio/http/sse）")
+        url = s.get("url", "")
+        if transport == "stdio" and not s.get("command"):
+            raise SystemExit(f"[config] mcp.servers.{name} 缺 command（stdio 必填）")
+        if transport in ("http", "sse"):
+            if not url:
+                raise SystemExit(f"[config] mcp.servers.{name} 缺 url（http 必填）")
+            if not (url.startswith("http://") or url.startswith("https://")):
+                raise SystemExit(f"[config] 非法 mcp.servers.{name}.url: {url}（须 http(s):// 开头）")
+        mcp_servers[name] = MCPServerConfig(
+            name=name, transport=transport, command=s.get("command", ""),
+            args=list(s.get("args") or []), env=s.get("env"),
+            url=url, headers=dict(s.get("headers") or {}))
+
     return AgentConfig(provider=provider, model=data.get("model", ""), api_key=data.get("api_key"),
                        base_url=data.get("base_url"), max_tokens=data.get("max_tokens", 4096),
                        request_timeout=data.get("request_timeout", 120),
@@ -112,7 +158,9 @@ def load_config(path: str = "config.yaml") -> AgentConfig:
                        subagent_allow_bash=sa.get("allow_bash", False),
                        subagent_token_slice=subagent_token_slice,
                        subagent_max_parallel=subagent_max_parallel,
-                       team_max_workers=team_max_workers
+                       team_max_workers=team_max_workers,
+                       mcp_servers=mcp_servers,
+                       mcp_call_timeout=mcp_call_timeout
                        )
 
 

@@ -17,6 +17,7 @@
 - **注入防御**：system prompt v2 将"工具读入的外部内容"明确定义为不可信数据；环境说明运行时注入（去硬编码）
 - **会话持久化**：任务结束自动保存，`/resume` 编号或 ID 前缀恢复历史续聊，损坏文件隔离不炸列表
 - **多 Agent 协作**：`Agent` 工具派子代理（独立上下文跑检索/取证任务只回灌结论，保护主上下文）；同回合多个子代理线程池并发（默认 ≤3）；`/team` 团队模式 leader 用 `Spawn` 派 worker 并发干活 + 任务板流转 + SendMessage 留档
+- **MCP 客户端**：连接外部 MCP server（stdio 本地子进程 / Streamable HTTP 远程 / 旧版 SSE），远端工具以 `mcp__<server>__<tool>` 注入模型工具列表，官方 mcp SDK 经单后台事件循环线程桥接到同步主循环；参数透传远端校验、结果拍平截断、超时与掉线错误回灌自愈；单 server 失败不阻断启动、配置笔误启动即报错
 - **子代理输出可观测**：transcript 全程留痕（有界），任务执行中 **Ctrl+T** 弹菜单选看任一子代理实时输出，任务间 `/agents` 回看
 - **可观测性**：JSONL 结构化日志（llm/tool/compact/权限事件）、按天轮转（默认保留 30 天）、`/stats` 任务与 token 统计
 - **token 估算校准**：首个真实响应后按真实/朴素比值校准（clamp 0.5~3.0），逐步贴近真实 tokenizer
@@ -75,6 +76,8 @@ agent        # 启动；pytest 跑测试
 | `subagent.token_slice` | `100000` | 子代理单体 token 硬限（与主会话共用进程级总闸 `token_budget`） |
 | `subagent.max_parallel` | `3` | 同回合子代理并发上限 |
 | `team.max_workers` | `3` | `/team` 模式同时在跑 worker 上限（与 max_parallel 取小生效） |
+| `mcp.call_timeout` | `60` | MCP 工具调用超时秒数（全局统一） |
+| `mcp.servers` | `{}` | MCP server 映射：`transport: stdio`（`command`/`args`/`env`，env 为整体替换子进程环境）/ `http`（Streamable HTTP 新协议）/ `sse`（旧版 SSE，端点 /sse 结尾）；`url`/`headers` 鉴权；配置后启动连接并把工具注入列表，权限门逐次询问 |
 | `prompt_version` | 最新版 | pin 系统提示词版本（`agent/prompts/system_v{N}.md` 文件即版本；当前 v3 默认含子代理指引） |
 
 ## 使用说明
@@ -120,6 +123,7 @@ agent/
   tools/subagent.py  Agent 工具 + spawn 装配（子代理循环/TranscriptSink/并发常量）
   tools/team.py    任务板四工具 + SpawnTool 派 worker（/team 团队编排）
   budget.py        进程级 token 预算池（主会话与全部子代理共用，线程安全）
+  mcp_client.py    MCP 客户端（官方 SDK 后台 loop 线程桥接同步主循环，stdio/HTTP）
   viewer.py        子代理登记簿 + Ctrl+T 查看器 + /agents 渲染
   sandbox.py       命令沙箱（LocalExecutor + DockerExecutor + 探测 + trusted 判定）
   permissions.py   权限三模式 + SubGate 非交互只读门 + 危险命令模式
@@ -128,7 +132,7 @@ agent/
   journal.py       JSONL 事件日志 + 按天轮转（keep_days，线程锁）
   prompts/         system prompt 文件即版本（v1/v2 + v3 默认含子代理指引）
   spinner.py       等待动画（首个流式增量即停）
-tests/             304 项单测 + 4 docker 集成 skipif，全程零网络
+tests/             329 项单测 + 4 docker 集成 skipif，全程零网络（MCP 真协议回路走内存传输）
 CHANGELOG.md       版本历史（Keep-a-Changelog）
 ```
 
@@ -136,7 +140,7 @@ CHANGELOG.md       版本历史（Keep-a-Changelog）
 
 ```bash
 pip install -e ".[dev]"
-pytest                # 全部测试，零网络，约 10s
+pytest                # 全部测试，零网络，约 35s（含 MCP 真子进程回路）
 ruff check .          # lint（版本锁定 0.16.7，与 CI 一致）
 ```
 
@@ -159,6 +163,7 @@ CI（GitHub Actions）：push / PR 自动跑 ruff lint + 测试矩阵（ubuntu �
 
 ## 已知局限（路线图）
 
+- MCP：子代理/worker 不可用 MCP 工具（外部工具副作用不可控，仅主会话可见，权限门逐次询问）；server 中途掉线不自动重连（调用错误回灌模型自愈）；Streamable HTTP 全链路无 CI 测试（生命周期骨架与 stdio 共用，真机验证归用户）；单 server 工具多时会撑大工具列表（暂无 include/exclude 过滤）
 - docker exec 超时后容器内残留进程可能存活，由 `--pids-limit 256` 与会话结束销毁容器兜底
 - 工作区是 rw 挂载：容器内 `rm -rf /workspace` 真删宿主文件——所以 docker 模式下危险命令仍询问（已在设计文档声明）
 - 注入防御是 prompt 级"软防御"，拦不住铁了心配合注入的模型；结构性防御（内容标记/工具结果隔离）未做

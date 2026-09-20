@@ -47,5 +47,24 @@ subagent:
 team:
   max_workers: 3           # 同时在跑 worker 上限（与 subagent.max_parallel 取小生效）
 
+# MCP 客户端（外部工具生态：远端工具以 mcp__<server>__<tool> 注入，权限门逐次询问）
+# mcp:
+#   call_timeout: 60       # 工具调用超时（秒，全局统一）
+#   servers:
+#     fs:
+#       transport: stdio   # 本地子进程
+#       command: npx
+#       args: ["-y", "@modelcontextprotocol/server-filesystem", "."]
+#       env: {}            # 整体替换子进程环境（缺省继承精选变量）
+#     remote:
+#       transport: http    # Streamable HTTP（新协议，单一端点）
+#       url: https://example.com/mcp
+#       headers:
+#         Authorization: "Bearer xxx"
+#     legacy:
+#       transport: sse     # 旧版 SSE 协议（端点以 /sse 结尾，GET 返回 event-stream）
+#       url: http://127.0.0.1:2345/sse
+#       headers: {}
+
 # Prompt 版本（缺省 = 最新版；agent/prompts/system_v{N}.md 文件即版本）
 # prompt_version: 1

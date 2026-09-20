@@ -504,7 +504,8 @@ def test_openai_chat_stream_think_split_not_leaked():
 
 
 def test_openai_chat_stream_strip_normalization():
-    # P15 接受的 strip 归一：剥离 think 后的前导换行不进最终 text；上屏流保留原始换行
+    # P15 strip 归一（2026-09-20 翻转上屏侧取舍）：剥 think 后前导换行不进最终 text，
+    # 上屏流同样去前导换行（用户要求，回答顶格显示）；尾随换行不动
     p = make_openai()
     p.client = FakeOpenAIStreamClient([
         _oai_chunk(content="<think>想"),
@@ -514,8 +515,8 @@ def test_openai_chat_stream_strip_normalization():
     seen = []
     resp = p.chat_stream([UserMessage("x")], on_text=seen.append)
     assert resp.text == "你好"
-    assert "".join(seen) == "\n\n你好\n"          # 上屏保留原始换行（视觉无害）
-    assert "".join(seen).strip() == resp.text     # 归一后一致（smoke 新不变量）
+    assert "".join(seen) == "你好\n"               # 前导换行已去；尾随保留
+    assert "".join(seen).strip() == resp.text      # 归一后一致（smoke 新不变量）
 
 
 def test_create_provider_bad_base_url_friendly_exit():
@@ -524,3 +525,31 @@ def test_create_provider_bad_base_url_friendly_exit():
     cfg = AgentConfig(model="m", api_key="k", base_url="https://api:minimaxi:com/v1")
     with pytest.raises(SystemExit, match="base_url"):
         create_provider(cfg)
+
+
+# ---------- 流式首个正文增量去前导换行 ----------
+
+def test_openai_chat_stream_strips_leading_newlines_only_first():
+    p = make_openai()
+    p.client = FakeOpenAIStreamClient([
+        _oai_chunk(content="\n\n你好"),
+        _oai_chunk(content="\n世界"),
+        _oai_chunk(finish="stop"),
+    ])
+    seen = []
+    resp = p.chat_stream([UserMessage("x")], on_text=seen.append)
+    assert seen == ["你好", "\n世界"]        # 仅首个增量去前导；正文中间换行保留
+    assert resp.text == "你好\n世界"
+
+
+def test_openai_chat_stream_pure_newline_chunks_not_emitted():
+    p = make_openai()
+    p.client = FakeOpenAIStreamClient([
+        _oai_chunk(content="\n"),
+        _oai_chunk(content="\n"),
+        _oai_chunk(content="正文"),
+        _oai_chunk(finish="stop"),
+    ])
+    seen = []
+    resp = p.chat_stream([UserMessage("x")], on_text=seen.append)
+    assert seen == ["正文"] and resp.text == "正文"   # 纯换行增量不上屏

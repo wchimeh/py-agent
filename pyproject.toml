@@ -4,11 +4,12 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "coding-agent"
-version = "1.1.0"
+version = "1.2.0"
 description = "类 Claude Code 的终端编码 Agent：双协议接入、工具调用、上下文压缩、权限门控、流式输出"
 requires-python = ">=3.10"
 dependencies = [
     "anthropic>=1.5.0",
+    "mcp>=2.2.0",
     "openai>=3.13.0",
     "prompt-toolkit>=3.0.53",
     "pydantic>=2.13.5",

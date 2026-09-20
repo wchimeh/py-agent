@@ -10,6 +10,7 @@ from agent.budget import BudgetPool
 from agent.config import load_config
 from agent.journal import Journal
 from agent.loop import AgentLoop
+from agent.mcp_client import MCPManager
 from agent.permissions import PermissionGate
 from agent.providers import create_provider
 from agent.providers.retry import AgentError
@@ -129,6 +130,8 @@ def start_loop():
     docker_exec = _setup_sandbox(cfg, sid)
     journal = Journal.daily(keep_days=cfg.journal_keep_days) if cfg.journal else None
     provider = create_provider(cfg)
+    mcp_mgr = MCPManager(cfg.mcp_servers, call_timeout=cfg.mcp_call_timeout)
+    mcp_names = mcp_mgr.start_all()   # 必须先于 AgentLoop：allowed_tools 是启动时快照
     pool = BudgetPool(cfg.token_budget)   # 进程级总闸：主循环与全部子代理共用
     loop = AgentLoop(provider, prompt_version=cfg.prompt_version,
                      max_turns=cfg.max_turns, token_budget=cfg.token_budget,
@@ -154,6 +157,8 @@ def start_loop():
     print(f"[agent] 子代理=启用（只读，max_turns={cfg.subagent_max_turns}，"
           f"allow_bash={str(cfg.subagent_allow_bash).lower()}，"
           f"并发≤{cfg.subagent_max_parallel}；任务中 Ctrl+T / 任务间 /agents 查看输出）")
+    if mcp_names:
+        print(f"[agent] MCP={mcp_mgr.summary()}（工具以 mcp__ 前缀注入，权限门逐次询问）")
     print(f"[agent] 本次会话 {sid}")
     _hint_resume()
     try:
@@ -250,6 +255,7 @@ def start_loop():
                 except OSError as e:
                     print(f"[agent] ⚠ 会话保存失败: {e}")
     finally:
+        mcp_mgr.stop_all()   # 幂等：关会话/杀子进程/停 loop 线程/摘除 mcp__ 工具
         if docker_exec:
             docker_exec.stop()
 

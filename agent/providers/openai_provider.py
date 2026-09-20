@@ -148,6 +148,8 @@ class OpenAIProvider(LLMProvider):
             delta = c.delta
             if delta and delta.content:
                 piece = flt.feed(delta.content)
+                if piece and not texts:      # 首个非空增量去前导换行（剥 think 后正文常以 \n 开头）
+                    piece = piece.lstrip("\n\r")
                 if piece:
                     texts.append(piece)
                     on_text(piece)
@@ -167,6 +169,8 @@ class OpenAIProvider(LLMProvider):
                                arguments=_parse_args(s["args"]))
                       for i, s in sorted(acc.items())]
         tail = flt.flush()             # 流结束：放行被 holdback 的正文残留
+        if tail and not texts:
+            tail = tail.lstrip("\n\r")
         if tail:
             texts.append(tail)
             on_text(tail)

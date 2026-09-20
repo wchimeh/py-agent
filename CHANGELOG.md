@@ -2,6 +2,21 @@
 
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循语义化版本。
 
+## [1.2.0] - 2026-09-20
+
+MCP 客户端接入（P18）：外部工具生态即插即用。
+
+### MCP 客户端
+- **三传输**：stdio 本地子进程（`command`/`args`/`env`，env 为整体替换子进程环境）、Streamable HTTP 远程（`url`/`headers` 鉴权，经自备 httpx2 client 注入、自备自关）、旧版 SSE（真机反馈补齐：仅 /sse 端点的 server 占比不小）
+- **工具注入**：远端工具以 `mcp__<server>__<tool>` 命名动态注册进工具表（注册表新增 register_tool/unregister_prefix 接口），模型直接调用；注册先于 AgentLoop 构造（allowed_tools 启动快照约束）
+- **同步桥接**：官方 mcp SDK（asyncio）经单后台事件循环线程接入全同步主循环，run_coroutine_threadsafe 提交调用，全局 `mcp.call_timeout`（默认 60s）
+- **透传校验**：远端 inputSchema 直传 provider，本地不做 pydantic 校验（远端 schema 复杂度不可控，错杀合法调用不如让远端报错回灌自愈）
+- **权限**：MCP 工具走 PermissionGate 未知工具保守询问分支（default/acceptEdits 逐次询问、a 会话内放行、bypass 直通）；子代理/worker 不可见 MCP 工具（外部工具副作用不可控，设计决策）
+- **容错**：单 server 连接失败打警告不阻断启动；结果 content 拍平（image/audio 占位说明）+ 截断；超时/掉线错误回灌模型；stop_all 幂等清理（杀子进程/停线程/摘除 mcp__ 工具）
+- 新配置节 `mcp`（call_timeout/servers）；依赖 `mcp>=2.2.0`（2.x API：streamable_http_client / MCPServer / Tool.input_schema）
+- **流式上屏去前导换行**（P15 取舍翻转）：openai 协议剥 `<think>` 后首个非空正文增量 `lstrip` 换行再上屏，回答不再顶空行；正文中间与尾随换行不动，最终 `text` 归一行为不变
+- 测试 304 → 329 项（SDK 内存传输真协议回路 + 真子进程 stdio 回路 + Fake 桥接层），覆盖率 95%（branch ≥85 门禁保持），ruff 零告警
+
 ## [1.1.0] - 2026-09-17
 
 多 Agent 三层递进：同步子代理 → 并行子代理 → 团队编排（P17）。
