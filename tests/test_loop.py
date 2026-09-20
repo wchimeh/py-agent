@@ -264,6 +264,22 @@ def test_allowed_tools_filters_defs_and_rejects_outside(ws, tmp_path):
     assert not os.path.exists(target)                    # 未执行
 
 
+def test_allowed_tools_filters_defs_on_stream_path(ws, tmp_path):
+    # P19 前置修复：主循环流式路径（真机主路径）曾传全量 get_tool_defs()，
+    # 白名单只拦调用不收缩清单——收紧语义对流式路径必须同样生效
+    seen = {}
+
+    class SpyStream(FakeStreamProvider):
+        def chat_stream(self, messages, tools=None, system="", on_text=None):
+            seen["tools"] = [t.name for t in (tools or [])]
+            return super().chat_stream(messages, tools, system, on_text)
+
+    loop = AgentLoop(SpyStream([_end_resp()], []), max_turns=5,
+                     permission_gate=BYPASS_GATE, allowed_tools={"Read"})
+    loop.run("受限工具集·流式")
+    assert seen["tools"] == ["Read"]                     # 流式路径清单同样已过滤
+
+
 def test_sink_captures_lines_instead_of_stdout(ws, tmp_path, capsys):
     class ListSink:
         def __init__(self):

@@ -2,6 +2,19 @@
 
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循语义化版本。
 
+## [1.3.0] - 2026-09-20
+
+Skills 技能机制（P19）：SKILL.md 渐进披露，纯文档教模型新技能。
+
+### Skills
+- **双目录**：项目级 `.agent/skills/<名字>/SKILL.md`（随仓库共享）+ 用户级 `~/.agent/skills/`（跨项目），同名项目级优先；零配置，目录不存在即零行为
+- **frontmatter**：`name`（缺省=目录名）/ `description`（必填，缺失整条跳过打警告）/ `argument-hint`（用法提示）/ `allowed-tools`（逗号串或列表，未知键宽容）；缺 frontmatter、YAML 非法、读失败均跳过不阻断启动
+- **模型自主触发（渐进披露）**：启动把技能清单（名字+描述+路径）注入 system prompt，模型判断相关时自己 Read 全文按指引行事——只注入清单不注入全文，省 token
+- **斜杠触发**：`/skills` 列出全部；`/<名字> [参数]` 渲染后作为任务下发（正文含 `$ARGUMENTS` 则全部替换，否则参数附尾）；未知 `/xxx` 先查技能名再走普通输入
+- **allowed-tools 约束**：仅斜杠触发路径生效——临时收紧工具白名单、任务结束恢复（复用 /team 模式）；模型自主路径不限制
+- **修复流式路径工具列表不收缩**（P2 时代潜伏 bug）：主循环流式调用曾传全量 `get_tool_defs()` 而非白名单过滤结果，模型看得到白名单外工具定义（调用虽被拒但浪费 token）；skills 的工具约束依赖此修复
+- 测试 337 → 355 项，覆盖率 95%（branch ≥85 门禁保持），ruff 零告警
+
 ## [1.2.0] - 2026-09-20
 
 MCP 客户端接入（P18）：外部工具生态即插即用。
@@ -15,7 +28,7 @@ MCP 客户端接入（P18）：外部工具生态即插即用。
 - **容错**：单 server 连接失败打警告不阻断启动；结果 content 拍平（image/audio 占位说明）+ 截断；超时/掉线错误回灌模型；stop_all 幂等清理（杀子进程/停线程/摘除 mcp__ 工具）
 - 新配置节 `mcp`（call_timeout/servers）；依赖 `mcp>=2.2.0`（2.x API：streamable_http_client / MCPServer / Tool.input_schema）
 - **流式上屏去前导换行**（P15 取舍翻转）：openai 协议剥 `<think>` 后首个非空正文增量 `lstrip` 换行再上屏，回答不再顶空行；正文中间与尾随换行不动，最终 `text` 归一行为不变
-- 测试 304 → 329 项（SDK 内存传输真协议回路 + 真子进程 stdio 回路 + Fake 桥接层），覆盖率 95%（branch ≥85 门禁保持），ruff 零告警
+- 测试 304 → 337 项（SDK 内存传输真协议回路 + 真子进程 stdio 回路 + Fake 桥接层 + SSE/配置守卫/权限守卫 + 流式前导换行），覆盖率 95%（branch ≥85 门禁保持），ruff 零告警
 
 ## [1.1.0] - 2026-09-17
 

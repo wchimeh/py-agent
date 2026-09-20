@@ -18,6 +18,7 @@
 - **会话持久化**：任务结束自动保存，`/resume` 编号或 ID 前缀恢复历史续聊，损坏文件隔离不炸列表
 - **多 Agent 协作**：`Agent` 工具派子代理（独立上下文跑检索/取证任务只回灌结论，保护主上下文）；同回合多个子代理线程池并发（默认 ≤3）；`/team` 团队模式 leader 用 `Spawn` 派 worker 并发干活 + 任务板流转 + SendMessage 留档
 - **MCP 客户端**：连接外部 MCP server（stdio 本地子进程 / Streamable HTTP 远程 / 旧版 SSE），远端工具以 `mcp__<server>__<tool>` 注入模型工具列表，官方 mcp SDK 经单后台事件循环线程桥接到同步主循环；参数透传远端校验、结果拍平截断、超时与掉线错误回灌自愈；单 server 失败不阻断启动、配置笔误启动即报错
+- **Skills 技能**：SKILL.md 渐进披露——把"做某类事的标准流程"写成 Markdown 即可教模型新技能（零代码）。双目录：项目级 `.agent/skills/<名字>/`（随仓库共享）+ 用户级 `~/.agent/skills/`（跨项目），同名项目级优先；frontmatter 定义 name/description/argument-hint/allowed-tools；启动注入清单（模型自主 Read 全文按指引行事），`/skills` 列出、`/<名字> [参数]` 直接触发（`$ARGUMENTS` 渲染，allowed-tools 仅此路径临时收紧）；零配置，无目录零行为
 - **子代理输出可观测**：transcript 全程留痕（有界），任务执行中 **Ctrl+T** 弹菜单选看任一子代理实时输出，任务间 `/agents` 回看
 - **可观测性**：JSONL 结构化日志（llm/tool/compact/权限事件）、按天轮转（默认保留 30 天）、`/stats` 任务与 token 统计
 - **token 估算校准**：首个真实响应后按真实/朴素比值校准（clamp 0.5~3.0），逐步贴近真实 tokenizer
@@ -109,6 +110,20 @@ REPL 内命令：
 
 **子代理与团队**：大范围检索/证据收集类任务值得 `Agent` 拆派——子代理独立上下文跑完只回灌结论，默认只读（Write/Edit 无权，Bash 需显式开启且仅限主会话已"总是允许"的命令前缀），不能再派生子代理（防递归）。同回合多个 Agent 调用自动并发。`/team <目标>` 进入 leader 模式：Spawn 派 worker（带任务板工具 TaskCreate/TaskList/TaskUpdate/SendMessage）并发干活、跑完即回收（Spawn 返回自动把任务置 completed，不依赖模型自觉流转），leader 汇总各报告给用户。子代理与主会话共用进程级 token 总闸（`token_budget`），池尽全部终止。
 
+**技能（Skills）**：把某类任务的标准流程写成 Markdown，模型即学会照办——启动注入技能清单（名字+描述+路径），模型判断相关时自己读全文；也可 `/<技能名> 参数` 直接触发。放 `.agent/skills/<名字>/SKILL.md`（项目级，随仓库共享）或 `~/.agent/skills/<名字>/SKILL.md`（用户级，跨项目），同名项目级优先：
+
+```markdown
+---
+description: 统计指定文件的行数与字符数
+argument-hint: "<文件路径>"
+allowed-tools: Read, Glob
+---
+用 Glob 确认文件存在，再 Read 该文件，报告行数与字符数。
+目标文件：$ARGUMENTS
+```
+
+`description` 必填（缺失该技能跳过并打警告）；`allowed-tools` 仅斜杠触发时临时收紧工具集（跑完恢复）；正文 `$ARGUMENTS` 替换为命令后参数（无占位符则参数附尾）。`/skills` 查看已发现列表。
+
 ## 项目结构
 
 ```
@@ -124,6 +139,7 @@ agent/
   tools/team.py    任务板四工具 + SpawnTool 派 worker（/team 团队编排）
   budget.py        进程级 token 预算池（主会话与全部子代理共用，线程安全）
   mcp_client.py    MCP 客户端（官方 SDK 后台 loop 线程桥接同步主循环，stdio/HTTP）
+  skills.py        Skills 技能（双目录发现/frontmatter 解析/清单/参数渲染）
   viewer.py        子代理登记簿 + Ctrl+T 查看器 + /agents 渲染
   sandbox.py       命令沙箱（LocalExecutor + DockerExecutor + 探测 + trusted 判定）
   permissions.py   权限三模式 + SubGate 非交互只读门 + 危险命令模式
@@ -132,7 +148,7 @@ agent/
   journal.py       JSONL 事件日志 + 按天轮转（keep_days，线程锁）
   prompts/         system prompt 文件即版本（v1/v2 + v3 默认含子代理指引）
   spinner.py       等待动画（首个流式增量即停）
-tests/             329 项单测 + 4 docker 集成 skipif，全程零网络（MCP 真协议回路走内存传输）
+tests/             355 项单测 + 4 docker 集成 skipif，全程零网络（MCP 真协议回路走内存传输）
 CHANGELOG.md       版本历史（Keep-a-Changelog）
 ```
 
@@ -164,6 +180,7 @@ CI（GitHub Actions）：push / PR 自动跑 ruff lint + 测试矩阵（ubuntu �
 ## 已知局限（路线图）
 
 - MCP：子代理/worker 不可用 MCP 工具（外部工具副作用不可控，仅主会话可见，权限门逐次询问）；server 中途掉线不自动重连（调用错误回灌模型自愈）；Streamable HTTP 全链路无 CI 测试（生命周期骨架与 stdio 共用，真机验证归用户）；单 server 工具多时会撑大工具列表（暂无 include/exclude 过滤）
+- Skills：项目级 SKILL.md 会进模型上下文（不可信仓库慎用——skill 属用户/仓库主动放置的指令文件，可信边界内，但克隆陌生仓库时须知）；技能清单是启动快照（运行中增删不感知，重启生效）；技能名与内置命令撞车时内置优先（避开 /help /stats 等保留名）；allowed-tools 与 /team 不组合；docker 沙箱下用户级技能模型须用 Read 读全文（宿主 home 不在容器挂载内）
 - docker exec 超时后容器内残留进程可能存活，由 `--pids-limit 256` 与会话结束销毁容器兜底
 - 工作区是 rw 挂载：容器内 `rm -rf /workspace` 真删宿主文件——所以 docker 模式下危险命令仍询问（已在设计文档声明）
 - 注入防御是 prompt 级"软防御"，拦不住铁了心配合注入的模型；结构性防御（内容标记/工具结果隔离）未做

@@ -22,6 +22,7 @@ from agent.session import (
     new_session_id,
     save_session,
 )
+from agent.skills import catalog_note, load_skills, render
 from agent.tools import subagent, team
 from agent.tools.bash import refresh_description
 from agent.tools.registry import get_tool_defs
@@ -149,6 +150,9 @@ def start_loop():
         loop.system += _env_note(docker=True)
     else:
         loop.system += _env_note(docker=False)
+    skills = load_skills(get_root())   # 项目级 + 用户级双目录，同名项目级优先
+    if skills:
+        loop.system += catalog_note(skills)   # 渐进披露：清单注入，模型自主 Read 全文
     print(f"[agent] provider={cfg.provider} model={cfg.model} 权限={gate.mode.value}（/help 查看命令）")
     print(f"[agent] 工作区={get_root()}（Write/Edit 仅限此目录内）")
     if docker_exec:
@@ -159,6 +163,8 @@ def start_loop():
           f"并发≤{cfg.subagent_max_parallel}；任务中 Ctrl+T / 任务间 /agents 查看输出）")
     if mcp_names:
         print(f"[agent] MCP={mcp_mgr.summary()}（工具以 mcp__ 前缀注入，权限门逐次询问）")
+    if skills:
+        print(f"[agent] 技能={len(skills)} 个（/skills 查看，/<名字> 触发，模型亦可自主使用）")
     print(f"[agent] 本次会话 {sid}")
     _hint_resume()
     try:
@@ -176,7 +182,8 @@ def start_loop():
                 print("[命令] /help 命令列表 · /stats 会话统计 · /resume [编号|ID前缀] 恢复会话\n"
                       "        /permission [default/acceptEdits/bypass] 查看/切换权限 · /exit 退出\n"
                       "        /agents [编号] 子代理列表/查看其输出（任务中可 Ctrl+T）\n"
-                      "        /team <目标> 团队模式（leader 派 worker 并发干活） · /tasks 任务板与收件箱")
+                      "        /team <目标> 团队模式（leader 派 worker 并发干活） · /tasks 任务板与收件箱\n"
+                      "        /skills 技能列表 · /<技能名> [参数] 触发技能")
                 continue
             if user_input == "/agents":
                 print(browse(registry))
@@ -232,6 +239,17 @@ def start_loop():
                 print(board.summary())
                 print(board.inbox_summary())
                 continue
+            if user_input == "/skills":
+                if not skills:
+                    print("[agent] 没有技能。把 SKILL.md 放进 .agent/skills/<名字>/"
+                          "（项目级）或 ~/.agent/skills/<名字>/（用户级）即可创建")
+                else:
+                    print(f"[技能] {len(skills)} 个（/<名字> 触发；模型亦可自主使用）")
+                    for s in skills:
+                        hint = f" {s.argument_hint}" if s.argument_hint else ""
+                        print(f"  /{s.name}{hint} — {s.description}")
+                        print(f"    {s.path}")
+                continue
             if user_input.startswith("/team "):
                 goal = user_input.split(maxsplit=1)[1].strip()
                 if goal:
@@ -248,6 +266,25 @@ def start_loop():
                         except OSError as e:
                             print(f"[agent] ⚠ 会话保存失败: {e}")
                 continue
+            if user_input.startswith("/"):
+                # 非内置命令的 /xxx：先查技能名，命中触发，未命中按普通输入交模型
+                parts = user_input.split(maxsplit=1)
+                hit = next((s for s in skills if s.name == parts[0][1:]), None)
+                if hit is not None:
+                    args = parts[1].strip() if len(parts) > 1 else ""
+                    saved_tools = loop.allowed_tools
+                    if hit.allowed_tools:   # 仅斜杠触发路径收紧（模型自主路径不限制）
+                        loop.allowed_tools = set(hit.allowed_tools)
+                    try:
+                        _run_task(loop, registry, render(hit, args))
+                    finally:
+                        loop.allowed_tools = saved_tools
+                    if cfg.save_session:
+                        try:
+                            save_session(sid, loop.messages)
+                        except OSError as e:
+                            print(f"[agent] ⚠ 会话保存失败: {e}")
+                    continue
             _run_task(loop, registry, user_input)
             if cfg.save_session:  # 正常/打断/报错三种结局都保存
                 try:

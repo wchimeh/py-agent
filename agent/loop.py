@@ -172,7 +172,7 @@ class AgentLoop:
             sys.stdout.flush()
 
         try:
-            return stream_fn(self.messages, tools=get_tool_defs(),
+            return stream_fn(self.messages, tools=tools,
                              system=self.system, on_text=_on_delta)
         finally:
             sp.__exit__(None, None, None)
